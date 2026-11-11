@@ -41,6 +41,9 @@ export interface Scene {
   audioDuration?: number;
   voiceName?: string;
   voiceType?: string;
+  speedRate?: number; // 0.9, 1.0, 1.1, 1.2 (default 1.0)
+  approvedNarrationText?: string; // Single source of truth for approved narration
+  isNarrationSynced?: boolean; // True if audio matches current approved narration
 
   // Individual Scene Rendered Video properties
   renderedVideoUrl?: string;
