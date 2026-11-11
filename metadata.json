@@ -1,0 +1,10 @@
+{
+  "name": "Bài 12A: Thực hành đa phương tiện",
+  "description": "Ứng dụng giáo dục Tin học Lớp 4 - Bài 12A: Thực hành đa phương tiện. Tích hợp AI Studio tạo video từ tài liệu Word, khám phá địa danh TP.HCM, thực hành điều khiển trình phát video và dự án nhóm.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
