@@ -53,6 +53,14 @@ export const SHARED_LESSON_VIDEO_CONFIG: SharedLessonVideoConfig = {
 };
 `;
   writeFileSync(SHARED_CONFIG_TS_FILE, tsContent, 'utf-8');
+  const verifiedContent = readFileSync(SHARED_CONFIG_TS_FILE, 'utf-8');
+  if (
+    !verifiedContent.includes(`sourceType: ${JSON.stringify(config.sourceType)}`) ||
+    !verifiedContent.includes(`embedUrl: ${JSON.stringify(config.embedUrl)}`) ||
+    !verifiedContent.includes(`videoId: ${JSON.stringify(config.videoId)}`)
+  ) {
+    throw new Error('Không thể xác minh nội dung đã ghi vào src/config/lessonVideoConfig.ts');
+  }
 }
 
 app.use(express.json({ limit: '1mb' }));
@@ -77,19 +85,59 @@ interface SavedExternalVideoLink {
   accessMessage?: string;
 }
 
+function readSharedConfigTsFallback(): SavedExternalVideoLink | null {
+  try {
+    if (!existsSync(SHARED_CONFIG_TS_FILE)) return null;
+    const raw = readFileSync(SHARED_CONFIG_TS_FILE, 'utf-8');
+    const sourceMatch = raw.match(/sourceType:\s*["'](youtube|gdrive)["']/);
+    if (!sourceMatch) return null;
+
+    const titleMatch = raw.match(/title:\s*["']([^"']*)["']/);
+    const idMatch = raw.match(/videoId:\s*["']([^"']*)["']/);
+    const origMatch = raw.match(/originalUrl:\s*["']([^"']*)["']/);
+    const embedMatch = raw.match(/embedUrl:\s*["']([^"']*)["']/);
+    const useMatch = raw.match(/useInKhoiDong:\s*(true|false)/);
+    const tsMatch = raw.match(/updatedAt:\s*(\d+)/);
+
+    const embedUrl = embedMatch?.[1] || '';
+    const externalId = idMatch?.[1] || '';
+    if (!embedUrl && !externalId) return null;
+
+    return {
+      sourceType: sourceMatch[1] as 'youtube' | 'gdrive',
+      originalUrl: origMatch?.[1] || embedUrl,
+      externalId,
+      embedUrl,
+      filename: titleMatch?.[1] || 'Video bài học trực tuyến',
+      timestamp: tsMatch ? Number(tsMatch[1]) : Date.now(),
+      useInKhoiDong: useMatch ? useMatch[1] !== 'false' : true,
+      accessible: true,
+    };
+  } catch (err) {
+    console.warn('Could not read shared config ts fallback:', err);
+    return null;
+  }
+}
+
 function readSavedExternalLink(): SavedExternalVideoLink | null {
+  let jsonLink: SavedExternalVideoLink | null = null;
   try {
     if (existsSync(ACTIVE_LINK_FILE)) {
       const raw = readFileSync(ACTIVE_LINK_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
       if (parsed && (parsed.sourceType === 'youtube' || parsed.sourceType === 'gdrive') && parsed.embedUrl) {
-        return parsed as SavedExternalVideoLink;
+        jsonLink = parsed as SavedExternalVideoLink;
       }
     }
   } catch (err) {
     console.warn('Could not read active video link file:', err);
   }
-  return null;
+
+  const tsLink = readSharedConfigTsFallback();
+  if (tsLink && (!jsonLink || (tsLink.timestamp || 0) >= (jsonLink.timestamp || 0))) {
+    return tsLink;
+  }
+  return jsonLink;
 }
 
 // Endpoint: GET /api/active-lesson-video
@@ -161,11 +209,16 @@ app.post('/api/lesson-video-link', (req, res) => {
       filename || (sourceType === 'youtube' ? `YouTube (${externalId})` : `Google Drive (${externalId})`)
     );
 
+    const cleanEmbedUrl =
+      sourceType === 'youtube'
+        ? `https://www.youtube.com/embed/${String(externalId)}`
+        : String(embedUrl);
+
     const payload: SavedExternalVideoLink = {
       sourceType,
-      originalUrl: String(originalUrl || embedUrl),
+      originalUrl: String(originalUrl || cleanEmbedUrl),
       externalId: String(externalId),
-      embedUrl: String(embedUrl),
+      embedUrl: cleanEmbedUrl,
       filename: resolvedTitle,
       timestamp: nowTs,
       useInKhoiDong: useInKhoiDong !== false,
@@ -184,9 +237,14 @@ app.post('/api/lesson-video-link', (req, res) => {
       updatedAt: nowTs,
     });
 
-    return res.json({ success: true, savedInSharedConfig: true, data: payload });
+    return res.json({ success: true, savedInSharedConfig: true, verifiedOnDisk: true, data: payload });
   } catch (err: any) {
-    return res.status(500).json({ error: err?.message || 'Không thể lưu đường dẫn video' });
+    return res.status(500).json({
+      success: false,
+      savedInSharedConfig: false,
+      verifiedOnDisk: false,
+      error: err?.message || 'Không thể lưu đường dẫn video vào src/config/lessonVideoConfig.ts',
+    });
   }
 });
 

@@ -16,11 +16,11 @@ export interface SharedLessonVideoConfig {
  * tệp này sẽ được cập nhật trực tiếp để đồng bộ cho mọi thiết bị (máy tính, điện thoại, ẩn danh) sau khi deploy.
  */
 export const SHARED_LESSON_VIDEO_CONFIG: SharedLessonVideoConfig = {
-  sourceType: "default",
-  title: "KhamPha_TPHCM_HD720p.webm",
-  videoId: "",
-  originalUrl: "",
-  embedUrl: "/video/default-lesson-hcm.webm",
+  sourceType: "youtube",
+  title: "Khám phá Thành phố Hồ Chí Minh – Bài 12A",
+  videoId: "pGMODCNfo40",
+  originalUrl: "https://youtu.be/pGMODCNfo40",
+  embedUrl: "https://www.youtube.com/embed/pGMODCNfo40",
   useInKhoiDong: true,
-  updatedAt: 0,
+  updatedAt: 1794649916392,
 };

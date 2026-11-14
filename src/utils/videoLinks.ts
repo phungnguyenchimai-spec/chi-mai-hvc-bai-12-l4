@@ -10,6 +10,38 @@ export interface ParsedVideoLink {
 }
 
 /**
+ * Chuẩn hóa URL nhúng YouTube để phát trực tiếp trong iframe (giữ nguyên đường dẫn gốc trong cấu hình).
+ */
+export function normalizeYouTubeEmbedUrl(url: string, fallbackVideoId?: string): string {
+  const trimmed = (url || '').trim();
+  const idMatch = trimmed.match(/(?:youtube\.com\/(?:watch\?.*v=|embed\/|shorts\/|live\/|v\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  const videoId = idMatch?.[1] || (fallbackVideoId && /^[a-zA-Z0-9_-]{11}$/.test(fallbackVideoId) ? fallbackVideoId : '');
+
+  if (!videoId) {
+    return trimmed;
+  }
+
+  try {
+    const base = new URL(`https://www.youtube.com/embed/${videoId}`);
+    if (trimmed.includes('?')) {
+      const parsedInput = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+      parsedInput.searchParams.forEach((value, key) => {
+        if (key !== 'v') {
+          base.searchParams.set(key, value);
+        }
+      });
+    }
+    if (!base.searchParams.has('rel')) base.searchParams.set('rel', '0');
+    if (!base.searchParams.has('modestbranding')) base.searchParams.set('modestbranding', '1');
+    if (!base.searchParams.has('enablejsapi')) base.searchParams.set('enablejsapi', '1');
+    if (!base.searchParams.has('playsinline')) base.searchParams.set('playsinline', '1');
+    return base.toString();
+  } catch {
+    return `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&enablejsapi=1&playsinline=1`;
+  }
+}
+
+/**
  * Extracts YouTube Video ID (11 chars) from standard, short, embed, live, and shorts URLs.
  * Supports public and unlisted YouTube videos.
  */

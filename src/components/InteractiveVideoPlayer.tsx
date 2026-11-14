@@ -12,7 +12,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { ExportedVideo, VideoSourceType } from '../types';
-import { formatVideoDuration } from '../utils/videoLinks';
+import { formatVideoDuration, normalizeYouTubeEmbedUrl } from '../utils/videoLinks';
 
 interface InteractiveVideoPlayerProps {
   video?: ExportedVideo | null;
@@ -58,15 +58,19 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
   const [showControls, setShowControls] = useState(true);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
+  const rawSrc = video?.embedUrl || video?.url || videoUrl || '/video/default-lesson-hcm.webm';
   const resolvedSourceType: VideoSourceType =
     video?.sourceType ||
-    (videoUrl?.includes('youtube.com/embed')
+    (rawSrc.includes('youtube.com/embed') || rawSrc.includes('youtu.be/')
       ? 'youtube'
-      : videoUrl?.includes('drive.google.com/file/')
+      : rawSrc.includes('drive.google.com/file/')
         ? 'gdrive'
         : 'local');
 
-  const resolvedSrc = video?.embedUrl || video?.url || videoUrl || '/video/default-lesson-hcm.webm';
+  const resolvedSrc =
+    resolvedSourceType === 'youtube'
+      ? normalizeYouTubeEmbedUrl(rawSrc, video?.externalId)
+      : rawSrc;
   const isEmbed = resolvedSourceType === 'youtube' || resolvedSourceType === 'gdrive';
 
   // Reset player state cleanly when source changes
@@ -322,6 +326,7 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
             src={resolvedSrc}
             title={title}
             onLoad={handleIframeLoad}
+            referrerPolicy="strict-origin-when-cross-origin"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
             allowFullScreen
             className="w-full h-full border-0"

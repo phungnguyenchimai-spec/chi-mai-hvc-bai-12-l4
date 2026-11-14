@@ -11,16 +11,33 @@ import { loadExportedVideoBlob, loadActiveVideoSourceMeta } from './utils/db';
 import { SHARED_LESSON_VIDEO_CONFIG } from './config/lessonVideoConfig';
 import { parseGoogleDriveUrl, parseYouTubeUrl } from './utils/videoLinks';
 
+function isValidSharedRemoteConfig(): boolean {
+  const cfg = SHARED_LESSON_VIDEO_CONFIG;
+  return (
+    cfg.useInKhoiDong !== false &&
+    (cfg.sourceType === 'youtube' || cfg.sourceType === 'gdrive') &&
+    Boolean(cfg.embedUrl || cfg.videoId)
+  );
+}
+
 function buildSharedFallbackVideo(): ExportedVideo {
   const cfg = SHARED_LESSON_VIDEO_CONFIG;
-  if (cfg.sourceType === 'youtube' || cfg.sourceType === 'gdrive') {
+  if (isValidSharedRemoteConfig()) {
+    const fallbackEmbed =
+      cfg.embedUrl ||
+      (cfg.sourceType === 'youtube' && cfg.videoId
+        ? `https://www.youtube.com/embed/${cfg.videoId}`
+        : cfg.sourceType === 'gdrive' && cfg.videoId
+          ? `https://drive.google.com/file/d/${cfg.videoId}/preview`
+          : '');
+
     return {
       sourceType: cfg.sourceType,
-      url: cfg.embedUrl,
-      embedUrl: cfg.embedUrl,
+      url: fallbackEmbed,
+      embedUrl: fallbackEmbed,
       originalUrl: cfg.originalUrl,
       externalId: cfg.videoId,
-      filename: cfg.title,
+      filename: cfg.title || 'Khám phá Thành phố Hồ Chí Minh – Bài 12A',
       duration: 0,
       sizeBytes: 0,
       timestamp: cfg.updatedAt || Date.now(),
@@ -118,14 +135,14 @@ export default function App() {
         ]);
 
         const sharedConfig = SHARED_LESSON_VIDEO_CONFIG;
-        const hasSharedRemoteConfig =
-          (sharedConfig.sourceType === 'youtube' || sharedConfig.sourceType === 'gdrive') &&
-          !!sharedConfig.embedUrl;
+        const hasSharedRemoteConfig = isValidSharedRemoteConfig();
 
         const hasDevServerLink =
+          import.meta.env.DEV &&
           serverResp &&
           serverResp.exists &&
-          (serverResp.sourceType === 'youtube' || serverResp.sourceType === 'gdrive');
+          (serverResp.sourceType === 'youtube' || serverResp.sourceType === 'gdrive') &&
+          Boolean(serverResp.embedUrl || serverResp.url);
 
         const localTimestamp = localMeta?.timestamp || savedBlob?.savedAt || 0;
         const sharedTimestamp = Math.max(
@@ -133,12 +150,12 @@ export default function App() {
           hasDevServerLink ? serverResp.timestamp || 1 : 0
         );
 
-        // Nếu trên thiết bị hiện tại có video cục bộ mới hơn cấu hình dùng chung
+        // Nếu trên thiết bị hiện tại có video cục bộ mới hơn rõ rệt so với cấu hình dùng chung
         if (
           localMeta?.sourceType === 'local' &&
           savedBlob?.blob &&
           savedBlob.blob.size > 0 &&
-          localTimestamp >= sharedTimestamp
+          localTimestamp > sharedTimestamp
         ) {
           const url = URL.createObjectURL(savedBlob.blob);
           setExportedVideo({
@@ -182,8 +199,8 @@ export default function App() {
           return;
         }
 
-        // Nếu đang ở môi trường dev AI Studio và có liên kết mới từ server
-        if (hasDevServerLink && (serverResp.timestamp || 0) >= (sharedConfig.updatedAt || 0)) {
+        // Trong môi trường phát triển (AI Studio), nếu dev server có liên kết mới hơn bản bundle
+        if (hasDevServerLink && (serverResp.timestamp || 0) > (sharedConfig.updatedAt || 0)) {
           setExportedVideo({
             sourceType: serverResp.sourceType,
             url: serverResp.embedUrl || serverResp.url,
@@ -202,14 +219,14 @@ export default function App() {
           return;
         }
 
-        // Cấu hình dùng chung cố định trong mã nguồn (src/config/lessonVideoConfig.ts)
+        // Ưu tiên cấu hình dùng chung cố định trong mã nguồn (src/config/lessonVideoConfig.ts)
         if (hasSharedRemoteConfig) {
           setExportedVideo(buildSharedFallbackVideo());
           return;
         }
 
-        // Video cục bộ chưa có meta nhưng còn blob trong IndexedDB
-        if (savedBlob?.blob && savedBlob.blob.size > 0 && (savedBlob.savedAt || 0) >= sharedTimestamp) {
+        // Video cục bộ chưa có meta nhưng còn blob trong IndexedDB (chỉ khi không có cấu hình dùng chung)
+        if (savedBlob?.blob && savedBlob.blob.size > 0 && (savedBlob.savedAt || 0) > sharedTimestamp) {
           const url = URL.createObjectURL(savedBlob.blob);
           setExportedVideo({
             sourceType: 'local',

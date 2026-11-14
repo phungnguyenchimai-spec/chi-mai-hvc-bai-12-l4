@@ -15,6 +15,7 @@ import {
   formatFileSize,
   getSourceLabel,
   checkYouTubeVideoClient,
+  normalizeYouTubeEmbedUrl,
 } from '../../utils/videoLinks';
 import confetti from 'canvas-confetti';
 import {
@@ -133,7 +134,11 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
 
   const currentSourceType: VideoSourceType = exportedVideo?.sourceType || 'default';
   const isEmbedPreview = currentSourceType === 'gdrive' || currentSourceType === 'youtube';
-  const activeVideoUrl = exportedVideo?.embedUrl || exportedVideo?.url || '/video/default-lesson-hcm.webm';
+  const rawActiveVideoUrl = exportedVideo?.embedUrl || exportedVideo?.url || '/video/default-lesson-hcm.webm';
+  const activeVideoUrl =
+    currentSourceType === 'youtube'
+      ? normalizeYouTubeEmbedUrl(rawActiveVideoUrl, exportedVideo?.externalId)
+      : rawActiveVideoUrl;
   const displayDuration = duration > 0 ? duration : (exportedVideo?.duration || 0);
 
   // HTML5 Video Handlers (Local MP4/WebM & Default)
@@ -431,6 +436,7 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
       });
 
       let savedInSharedConfig = false;
+      let saveErrorMsg = '';
       if (import.meta.env.DEV) {
         try {
           const saveResp = await fetch('/api/lesson-video-link', {
@@ -438,32 +444,49 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...newVideoObj, useInKhoiDong: true }),
           });
-          if (saveResp.ok) {
-            const saveJson = await saveResp.json();
-            savedInSharedConfig = !!saveJson.savedInSharedConfig;
+          const saveJson = await saveResp.json().catch(() => ({}));
+          if (saveResp.ok && saveJson?.savedInSharedConfig === true && saveJson?.verifiedOnDisk === true) {
+            savedInSharedConfig = true;
+          } else {
+            saveErrorMsg =
+              saveJson?.error ||
+              'Không thể ghi và xác minh tệp cấu hình src/config/lessonVideoConfig.ts trên máy chủ phát triển.';
           }
-        } catch {
-          // Non-fatal
+        } catch (saveErr: any) {
+          saveErrorMsg = saveErr?.message || 'Lỗi kết nối API lưu cấu hình dùng chung.';
         }
       }
 
-      const deployNote = savedInSharedConfig
-        ? ' Đã ghi vào cấu hình dùng chung (src/config/lessonVideoConfig.ts) để triển khai GitHub/Vercel.'
-        : ' Đã lưu trên trình duyệt này (IndexedDB). Muốn cố định cho mọi thiết bị khi deploy Vercel mà không dùng database, hãy lưu trong môi trường mã nguồn trước khi push GitHub.';
+      if (import.meta.env.DEV && !savedInSharedConfig) {
+        setLinkStatus({
+          type: 'error',
+          message: `Cảnh báo: Chưa lưu được vào cấu hình dùng chung GitHub/Vercel (${saveErrorMsg}). Vui lòng kiểm tra lại trước khi xuất bản.`,
+          showDriveGuide: !accessible || isWarning,
+        });
+        setErrorMessage(`Không thể cập nhật tệp src/config/lessonVideoConfig.ts: ${saveErrorMsg}`);
+      } else {
+        const deployNote = savedInSharedConfig
+          ? ' Đã ghi và xác minh trong cấu hình dùng chung (src/config/lessonVideoConfig.ts) để triển khai GitHub/Vercel.'
+          : ' Lưu ý: Bạn đang chạy trên bản xem trước/tĩnh nên liên kết chỉ lưu cục bộ trong trình duyệt này (IndexedDB), không tự ghi vào mã nguồn GitHub/Vercel.';
 
-      setLinkStatus({
-        type: !accessible ? 'error' : isWarning ? 'warning' : 'success',
-        message: statusMsg + (accessible ? deployNote : ''),
-        showDriveGuide: !accessible || isWarning,
-      });
+        setLinkStatus({
+          type: !accessible ? 'error' : !import.meta.env.DEV || isWarning ? 'warning' : 'success',
+          message: statusMsg + (accessible ? deployNote : ''),
+          showDriveGuide: !accessible || isWarning,
+        });
+      }
 
       setCurrentTime(0);
       setDuration(0);
       setIsPlaying(false);
       onSetExportedVideo(newVideoObj);
       setIsProcessing(false);
-      if (accessible) {
-        showToast('Đã liên kết video Google Drive.');
+      if (accessible && (!import.meta.env.DEV || savedInSharedConfig)) {
+        showToast(
+          savedInSharedConfig
+            ? 'Đã lưu liên kết Google Drive vào cấu hình dùng chung.'
+            : 'Đã nạp Google Drive cục bộ trên trình duyệt này.'
+        );
       }
     } catch (err: any) {
       setIsProcessing(false);
@@ -493,11 +516,12 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
       const statusMsg = checkData.message;
       const isWarning = !!checkData.warning;
 
+      const cleanEmbedUrl = `https://www.youtube.com/embed/${parsed.id}`;
       const now = Date.now();
       const newVideoObj: ExportedVideo = {
         sourceType: 'youtube',
-        url: parsed.embedUrl,
-        embedUrl: parsed.embedUrl,
+        url: cleanEmbedUrl,
+        embedUrl: cleanEmbedUrl,
         originalUrl: parsed.originalUrl,
         externalId: parsed.id,
         filename: title,
@@ -514,7 +538,7 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
         sourceType: 'youtube',
         originalUrl: parsed.originalUrl,
         externalId: parsed.id,
-        embedUrl: parsed.embedUrl,
+        embedUrl: cleanEmbedUrl,
         filename: title,
         duration: 0,
         sizeBytes: 0,
@@ -524,6 +548,7 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
       });
 
       let savedInSharedConfig = false;
+      let saveErrorMsg = '';
       if (import.meta.env.DEV) {
         try {
           const saveResp = await fetch('/api/lesson-video-link', {
@@ -531,31 +556,49 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ...newVideoObj, useInKhoiDong: true }),
           });
-          if (saveResp.ok) {
-            const saveJson = await saveResp.json();
-            savedInSharedConfig = !!saveJson.savedInSharedConfig;
+          const saveJson = await saveResp.json().catch(() => ({}));
+          if (saveResp.ok && saveJson?.savedInSharedConfig === true && saveJson?.verifiedOnDisk === true) {
+            savedInSharedConfig = true;
+          } else {
+            saveErrorMsg =
+              saveJson?.error ||
+              'Không thể ghi và xác minh tệp cấu hình src/config/lessonVideoConfig.ts trên máy chủ phát triển.';
           }
-        } catch {
-          // Non-fatal
+        } catch (saveErr: any) {
+          saveErrorMsg = saveErr?.message || 'Lỗi kết nối API lưu cấu hình dùng chung.';
         }
       }
 
-      const deployNote = savedInSharedConfig
-        ? ' Đã lưu vào cấu hình dùng chung (src/config/lessonVideoConfig.ts) để đồng bộ khi đẩy lên GitHub và Vercel.'
-        : ' Đã lưu trên trình duyệt này (IndexedDB). Để mọi học sinh trên mọi thiết bị đều tự động thấy cùng video này trên Vercel, cần lưu vào tệp cấu hình src/config/lessonVideoConfig.ts trước khi deploy hoặc chia sẻ link kèm ?yt=' + parsed.id + '.';
+      if (import.meta.env.DEV && !savedInSharedConfig) {
+        setLinkStatus({
+          type: 'error',
+          message: `Cảnh báo: Chưa lưu được vào cấu hình dùng chung GitHub/Vercel (${saveErrorMsg}). Ứng dụng chưa thể đồng bộ video này khi đẩy lên GitHub.`,
+        });
+        setErrorMessage(`Không thể cập nhật tệp src/config/lessonVideoConfig.ts: ${saveErrorMsg}`);
+      } else {
+        const deployNote = savedInSharedConfig
+          ? ' Đã lưu và xác minh trong cấu hình dùng chung (src/config/lessonVideoConfig.ts) để đồng bộ khi đẩy lên GitHub và Vercel.'
+          : ' Lưu ý: Bạn đang dùng bản tĩnh (không phải môi trường mã nguồn) nên liên kết chỉ lưu cục bộ trong IndexedDB của trình duyệt này. Để đồng bộ qua GitHub/Vercel, hãy cập nhật tệp src/config/lessonVideoConfig.ts hoặc chia sẻ link kèm ?yt=' +
+            parsed.id +
+            '.';
 
-      setLinkStatus({
-        type: !accessible ? 'error' : isWarning ? 'warning' : 'success',
-        message: statusMsg + (accessible ? deployNote : ''),
-      });
+        setLinkStatus({
+          type: !accessible ? 'error' : !import.meta.env.DEV || isWarning ? 'warning' : 'success',
+          message: statusMsg + (accessible ? deployNote : ''),
+        });
+      }
 
       setCurrentTime(0);
       setDuration(0);
       setIsPlaying(false);
       onSetExportedVideo(newVideoObj);
       setIsProcessing(false);
-      if (accessible) {
-        showToast('Đã liên kết video YouTube.');
+      if (accessible && (!import.meta.env.DEV || savedInSharedConfig)) {
+        showToast(
+          savedInSharedConfig
+            ? 'Đã lưu video YouTube vào cấu hình dùng chung.'
+            : 'Đã nạp video YouTube cục bộ trên trình duyệt này.'
+        );
       }
     } catch (err: any) {
       setIsProcessing(false);
@@ -624,15 +667,32 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
       return;
     }
 
+    setErrorMessage(null);
+
     if (
       import.meta.env.DEV &&
       (exportedVideo.sourceType === 'youtube' || exportedVideo.sourceType === 'gdrive')
     ) {
-      await fetch('/api/lesson-video-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...exportedVideo, useInKhoiDong: true }),
-      }).catch(() => {});
+      try {
+        const saveResp = await fetch('/api/lesson-video-link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...exportedVideo, useInKhoiDong: true }),
+        });
+        const saveJson = await saveResp.json().catch(() => ({}));
+        if (!saveResp.ok || saveJson?.savedInSharedConfig !== true || saveJson?.verifiedOnDisk !== true) {
+          setErrorMessage(
+            saveJson?.error ||
+              'Không thể lưu và xác minh video vào src/config/lessonVideoConfig.ts. Không thể báo đồng bộ thành công.'
+          );
+          return;
+        }
+      } catch (err: any) {
+        setErrorMessage(
+          `Lỗi kết nối khi lưu cấu hình dùng chung: ${err?.message || 'Không thể ghi tệp lessonVideoConfig.ts'}`
+        );
+        return;
+      }
     }
 
     confetti({
@@ -642,7 +702,11 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
       colors: ['#0284c7', '#38bdf8', '#10b981'],
     });
 
-    showToast('Đã gắn video vào hoạt động 1. Khởi động.');
+    showToast(
+      import.meta.env.DEV && (exportedVideo.sourceType === 'youtube' || exportedVideo.sourceType === 'gdrive')
+        ? 'Đã lưu vào cấu hình dùng chung và gắn video vào hoạt động 1. Khởi động.'
+        : 'Đã gắn video vào hoạt động 1. Khởi động.'
+    );
     setTimeout(() => {
       onApplyToLesson(exportedVideo);
     }, 350);
@@ -985,6 +1049,7 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
               key={activeVideoUrl}
               src={activeVideoUrl}
               title={exportedVideo?.filename || 'Xem trước video bài học'}
+              referrerPolicy="strict-origin-when-cross-origin"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
               allowFullScreen
               className="w-full h-full border-0"
