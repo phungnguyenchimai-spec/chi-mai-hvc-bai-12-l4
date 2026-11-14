@@ -70,13 +70,24 @@ export interface ProjectData {
   updatedAt: number;
 }
 
+export type VideoSourceType = 'local' | 'gdrive' | 'youtube' | 'default';
+
 export interface ExportedVideo {
+  sourceType?: VideoSourceType;
   url: string;
-  blob: Blob;
+  originalUrl?: string;
+  externalId?: string;
+  embedUrl?: string;
+  blob?: Blob;
   filename: string;
   duration: number;
   sizeBytes: number;
   timestamp: number;
+  isUploaded?: boolean;
+  isDefault?: boolean;
+  storageNote?: string;
+  accessible?: boolean;
+  accessMessage?: string;
 }
 
 export interface MediaSearchResult {

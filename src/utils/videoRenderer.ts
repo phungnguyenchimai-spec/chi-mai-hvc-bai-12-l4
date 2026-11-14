@@ -71,8 +71,10 @@ export class VideoRenderer {
 
     const [img, videoElem, audioBuffer, bgBuffer] = await Promise.all([
       this.loadImageWithFallback(scene),
-      scene.mediaType === 'video' && scene.videoUrl ? this.loadVideo(scene.videoUrl) : Promise.resolve(null),
-      this.loadAudioBuffer(audioCtx, scene.audioBlobUrl),
+      (scene.renderedVideoUrl || (scene.mediaType === 'video' && scene.videoUrl))
+        ? this.loadVideo(scene.renderedVideoUrl || scene.videoUrl)
+        : Promise.resolve(null),
+      this.loadAudioBuffer(audioCtx, scene.audioBlobUrl, scene.sceneNumber),
       bgMusicOptions?.enabled && bgMusicOptions?.url ? this.loadAudioBuffer(audioCtx, bgMusicOptions.url) : Promise.resolve(null),
     ]);
 
@@ -82,8 +84,9 @@ export class VideoRenderer {
     }
 
     // Determine actual scene duration so speech is never cut off
+    // Formula: Scene duration = Audio duration + 1.5s hold frame buffer
     const finalDurationSeconds = audioBuffer
-      ? Math.max(durationSeconds || 6, Math.ceil(audioBuffer.duration) + 1.2)
+      ? Math.max(durationSeconds || 6, audioBuffer.duration + 1.5)
       : (durationSeconds || scene.duration || 8);
 
     // Setup carrier to guarantee audio stream is active
@@ -303,8 +306,8 @@ export class VideoRenderer {
       Promise.all(scenes.map(scene => this.loadImageWithFallback(scene))),
       Promise.all(
         scenes.map(scene =>
-          scene.mediaType === 'video' && scene.videoUrl
-            ? this.loadVideo(scene.videoUrl)
+          (scene.renderedVideoUrl || (scene.mediaType === 'video' && scene.videoUrl))
+            ? this.loadVideo(scene.renderedVideoUrl || scene.videoUrl)
             : Promise.resolve(null)
         )
       ),
@@ -345,9 +348,9 @@ export class VideoRenderer {
 
     const audioDestination = audioCtx.createMediaStreamDestination();
 
-    // Load narration audio buffers for each scene
+    // Load narration audio buffers for each scene with local audio fallback
     const audioBuffers: (AudioBuffer | null)[] = await Promise.all(
-      scenes.map(async scene => this.loadAudioBuffer(audioCtx, scene.audioBlobUrl))
+      scenes.map(async (scene, idx) => this.loadAudioBuffer(audioCtx, scene.audioBlobUrl, scene.sceneNumber || idx + 1))
     );
 
     // Load gentle background music
@@ -433,10 +436,11 @@ export class VideoRenderer {
     // BƯỚC 2: ĐANG DỰNG PHÂN CẢNH (Frame by frame)
     // ==========================================
     // Dynamic duration based on real audio buffer duration so speech is never truncated
+    // Formula: Scene duration = Audio duration + 1.5s hold frame buffer
     const sceneDurations = scenes.map((scene, idx) => {
       const buf = audioBuffers[idx];
       if (buf && buf.duration > 0) {
-        return Math.max(scene.duration || 12, Math.ceil(buf.duration) + 1.2);
+        return Math.max(scene.duration || 12, buf.duration + 1.5);
       }
       return scene.duration || 12;
     });
@@ -650,8 +654,8 @@ export class VideoRenderer {
 
     let drawnMedia = false;
 
-    // A. Render Video Clip if mediaType === 'video' and videoElem has loaded
-    if (scene.mediaType === 'video' && videoElem && videoElem.readyState >= 1) {
+    // A. Render Video Clip if videoElem has loaded
+    if (videoElem && videoElem.readyState >= 1) {
       try {
         const vW = videoElem.videoWidth || 1280;
         const vH = videoElem.videoHeight || 720;
@@ -899,23 +903,32 @@ export class VideoRenderer {
 
   private loadImageWithFallback(scene: Scene): Promise<HTMLImageElement | null> {
     return new Promise(resolve => {
-      const src = scene.imageUrl;
-      if (!src) {
-        resolve(this.createFallbackImage(scene.title));
-        return;
+      const sceneNum = Math.max(1, Math.min(5, scene.sceneNumber || 1));
+      let src = scene.imageUrl;
+      if (!src || src.includes('wikimedia.org')) {
+        src = `/images/scene-${sceneNum}.jpg`;
       }
 
       const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.referrerPolicy = 'no-referrer';
+      if (!src.startsWith('/')) {
+        img.crossOrigin = 'anonymous';
+      }
 
       let resolved = false;
       const timer = setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          resolve(this.createFallbackImage(scene.title));
+          // Try local asset if external timed out
+          if (src !== `/images/scene-${sceneNum}.jpg`) {
+            const localImg = new Image();
+            localImg.onload = () => resolve(localImg);
+            localImg.onerror = () => resolve(this.createFallbackImage(scene.title));
+            localImg.src = `/images/scene-${sceneNum}.jpg`;
+          } else {
+            resolve(this.createFallbackImage(scene.title));
+          }
         }
-      }, 4000);
+      }, 2500);
 
       img.onload = () => {
         if (!resolved) {
@@ -929,7 +942,14 @@ export class VideoRenderer {
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
-          resolve(this.createFallbackImage(scene.title));
+          if (src !== `/images/scene-${sceneNum}.jpg`) {
+            const localImg = new Image();
+            localImg.onload = () => resolve(localImg);
+            localImg.onerror = () => resolve(this.createFallbackImage(scene.title));
+            localImg.src = `/images/scene-${sceneNum}.jpg`;
+          } else {
+            resolve(this.createFallbackImage(scene.title));
+          }
         }
       };
 
@@ -957,7 +977,7 @@ export class VideoRenderer {
 
       ctx.font = '22px sans-serif';
       ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-      ctx.fillText('Học liệu minh họa TP. Hồ Chí Minh', 640, 420);
+      ctx.fillText('Học liệu minh họa TP. Hồ Chí Minh · Tin học Lớp 4', 640, 420);
     }
     const img = new Image();
     img.src = c.toDataURL('image/jpeg');
@@ -968,7 +988,6 @@ export class VideoRenderer {
     return new Promise(resolve => {
       if (!src) return resolve(null);
       const video = document.createElement('video');
-      video.crossOrigin = 'anonymous';
       video.muted = true;
       video.preload = 'auto';
       video.playsInline = true;
@@ -995,23 +1014,33 @@ export class VideoRenderer {
           resolved = true;
           resolve(video.readyState >= 1 ? video : null);
         }
-      }, 4000);
+      }, 2500);
 
       video.src = src;
     });
   }
 
-  private async loadAudioBuffer(audioCtx: AudioContext, src?: string): Promise<AudioBuffer | null> {
-    if (!src || !src.trim()) return null;
-    try {
-      const res = await fetch(src);
-      if (!res.ok) return null;
-      const arrayBuffer = await res.arrayBuffer();
-      return await audioCtx.decodeAudioData(arrayBuffer);
-    } catch (e) {
-      console.warn('Could not decode audio buffer from:', src, e);
-      return null;
+  private async loadAudioBuffer(audioCtx: AudioContext, src?: string, fallbackSceneNum?: number): Promise<AudioBuffer | null> {
+    const targets = [src];
+    if (fallbackSceneNum) {
+      targets.push(`/audio/scene-${fallbackSceneNum}.mp3`);
     }
+
+    for (const url of targets) {
+      if (!url || !url.trim()) continue;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) continue;
+        const arrayBuffer = await res.arrayBuffer();
+        const buffer = await audioCtx.decodeAudioData(arrayBuffer);
+        if (buffer && buffer.duration > 0) {
+          return buffer;
+        }
+      } catch (e) {
+        // try next target
+      }
+    }
+    return null;
   }
 }
 

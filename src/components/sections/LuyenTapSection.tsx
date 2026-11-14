@@ -240,7 +240,8 @@ export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
         <div className="lg:col-span-7 space-y-4">
           <div className="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-xs">
             <InteractiveVideoPlayer
-              videoUrl={exportedVideo?.url || null}
+              video={exportedVideo}
+              videoUrl={exportedVideo?.embedUrl || exportedVideo?.url || '/video/default-lesson-hcm.webm'}
               title="Khu vực thực hành điều khiển video"
               onPlay={handlePlayerPlay}
               onPause={handlePlayerPause}

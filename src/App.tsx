@@ -6,19 +6,8 @@ import { KhamPhaSection } from './components/sections/KhamPhaSection';
 import { LuyenTapSection } from './components/sections/LuyenTapSection';
 import { VanDungSection } from './components/sections/VanDungSection';
 import { StudioSection } from './components/sections/StudioSection';
-import { AppMode, AppTab, ProjectData, ExportedVideo } from './types';
-import { INITIAL_PROJECT } from './data/sampleData';
-import { loadProjects, loadExportedVideoBlob } from './utils/db';
-import { 
-  PlaySquare, 
-  Compass, 
-  Gamepad2, 
-  Users, 
-  Clapperboard, 
-  Sparkles,
-  BookOpen,
-  ArrowRight
-} from 'lucide-react';
+import { AppMode, AppTab, ExportedVideo } from './types';
+import { loadExportedVideoBlob, loadActiveVideoSourceMeta } from './utils/db';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('khoi_dong');
@@ -26,36 +15,132 @@ export default function App() {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [showTeacherGuide, setShowTeacherGuide] = useState<boolean>(false);
 
-  // Active Project Data
-  const [currentProject, setCurrentProject] = useState<ProjectData>(INITIAL_PROJECT);
-  // Exported Video (real WebM blob url)
+  // Active Lesson Video (local blob, Google Drive embed, YouTube embed, or default sample)
   const [exportedVideo, setExportedVideo] = useState<ExportedVideo | null>(null);
 
-  // Load saved projects & video from IndexedDB on startup
+  // Restore saved video source on startup (IndexedDB for local/device + API for multi-device links)
   useEffect(() => {
     async function initStorage() {
       try {
-        const projects = await loadProjects();
-        if (projects && projects.length > 0) {
-          setCurrentProject(projects[0]);
+        const [localMeta, savedBlob, serverResp] = await Promise.all([
+          loadActiveVideoSourceMeta(),
+          loadExportedVideoBlob('active-exported-video'),
+          fetch('/api/active-lesson-video').then(r => (r.ok ? r.json() : null)).catch(() => null),
+        ]);
+
+        const hasServerLink =
+          serverResp &&
+          serverResp.exists &&
+          (serverResp.sourceType === 'youtube' || serverResp.sourceType === 'gdrive');
+
+        const localTimestamp = localMeta?.timestamp || savedBlob?.savedAt || 0;
+        const serverTimestamp = serverResp?.timestamp || 0;
+
+        // 1. If device has a locally stored video that is newer than or equal to server link
+        if (
+          localMeta?.sourceType === 'local' &&
+          savedBlob?.blob &&
+          savedBlob.blob.size > 0 &&
+          (!hasServerLink || localTimestamp >= serverTimestamp)
+        ) {
+          const url = URL.createObjectURL(savedBlob.blob);
+          setExportedVideo({
+            sourceType: 'local',
+            url,
+            blob: savedBlob.blob,
+            filename: savedBlob.filename || localMeta.filename || 'video-bai-hoc.mp4',
+            duration: savedBlob.duration || localMeta.duration || 0,
+            sizeBytes: savedBlob.blob.size,
+            timestamp: localTimestamp,
+            isUploaded: true,
+            isDefault: false,
+          });
+          return;
         }
 
-        const savedVideo = await loadExportedVideoBlob('active-exported-video');
-        if (savedVideo) {
-          const url = URL.createObjectURL(savedVideo.blob);
+        // 2. If server has a saved YouTube / Google Drive link (cross-device sync)
+        if (hasServerLink) {
           setExportedVideo({
-            url,
-            blob: savedVideo.blob,
-            filename: savedVideo.filename,
-            duration: savedVideo.duration,
-            sizeBytes: savedVideo.blob.size,
-            timestamp: Date.now(),
+            sourceType: serverResp.sourceType,
+            url: serverResp.embedUrl || serverResp.url,
+            embedUrl: serverResp.embedUrl || serverResp.url,
+            originalUrl: serverResp.originalUrl,
+            externalId: serverResp.externalId,
+            filename: serverResp.filename || 'Video bài học trực tuyến',
+            duration: 0,
+            sizeBytes: 0,
+            timestamp: serverTimestamp,
+            isUploaded: true,
+            isDefault: false,
+            accessible: serverResp.accessible,
+            accessMessage: serverResp.accessMessage,
           });
+          return;
         }
+
+        // 3. If IndexedDB has an external link metadata record
+        if (localMeta && (localMeta.sourceType === 'youtube' || localMeta.sourceType === 'gdrive') && localMeta.embedUrl) {
+          setExportedVideo({
+            sourceType: localMeta.sourceType,
+            url: localMeta.embedUrl,
+            embedUrl: localMeta.embedUrl,
+            originalUrl: localMeta.originalUrl,
+            externalId: localMeta.externalId,
+            filename: localMeta.filename,
+            duration: 0,
+            sizeBytes: 0,
+            timestamp: localMeta.timestamp,
+            isUploaded: true,
+            isDefault: false,
+            accessible: localMeta.accessible,
+            accessMessage: localMeta.accessMessage,
+          });
+          return;
+        }
+
+        // 4. If IndexedDB has a saved local blob without meta
+        if (savedBlob?.blob && savedBlob.blob.size > 0) {
+          const url = URL.createObjectURL(savedBlob.blob);
+          setExportedVideo({
+            sourceType: 'local',
+            url,
+            blob: savedBlob.blob,
+            filename: savedBlob.filename || 'video-bai-hoc.mp4',
+            duration: savedBlob.duration || 0,
+            sizeBytes: savedBlob.blob.size,
+            timestamp: savedBlob.savedAt || Date.now(),
+            isUploaded: true,
+            isDefault: false,
+          });
+          return;
+        }
+
+        // 5. Fallback default sample video
+        setExportedVideo({
+          sourceType: 'default',
+          url: '/video/default-lesson-hcm.webm',
+          filename: 'KhamPha_TPHCM_HD720p.webm',
+          duration: 18.6,
+          sizeBytes: 1958608,
+          timestamp: Date.now(),
+          isDefault: true,
+          isUploaded: false,
+        });
       } catch (e) {
-        console.warn('Could not initialize from IndexedDB:', e);
+        console.warn('Could not initialize video storage:', e);
+        setExportedVideo({
+          sourceType: 'default',
+          url: '/video/default-lesson-hcm.webm',
+          filename: 'KhamPha_TPHCM_HD720p.webm',
+          duration: 18.6,
+          sizeBytes: 1958608,
+          timestamp: Date.now(),
+          isDefault: true,
+          isUploaded: false,
+        });
       }
     }
+
     initStorage();
   }, []);
 
@@ -79,6 +164,7 @@ export default function App() {
   const handleApplyExportedVideoToLesson = (video: ExportedVideo) => {
     setExportedVideo(video);
     setActiveTab('khoi_dong');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
@@ -126,8 +212,6 @@ export default function App() {
 
         {activeTab === 'studio' && (
           <StudioSection
-            currentProject={currentProject}
-            onUpdateProject={setCurrentProject}
             exportedVideo={exportedVideo}
             onSetExportedVideo={setExportedVideo}
             onApplyToLesson={handleApplyExportedVideoToLesson}
@@ -141,7 +225,7 @@ export default function App() {
         onClose={() => setShowTeacherGuide(false)}
       />
 
-      {/* Footer (Clean, unboxed metadata, zero-slop discipline) */}
+      {/* Footer */}
       <footer className="mt-auto border-t border-slate-200 bg-white py-6">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <div className="flex flex-wrap items-center gap-2">
@@ -151,7 +235,7 @@ export default function App() {
             <span>·</span>
             <span>Giáo dục địa phương TP. Hồ Chí Minh</span>
             <span>·</span>
-            <span>Chuẩn HTML5 / WebM</span>
+            <span>Hỗ trợ MP4 / WebM / Drive / YouTube</span>
           </div>
 
           <div className="flex items-center gap-4">
@@ -159,7 +243,7 @@ export default function App() {
               onClick={() => setActiveTab('studio')}
               className="text-slate-600 hover:text-sky-600 font-medium transition-colors"
             >
-              Studio tạo video
+              Video bài học
             </button>
             <button
               onClick={() => setShowTeacherGuide(true)}

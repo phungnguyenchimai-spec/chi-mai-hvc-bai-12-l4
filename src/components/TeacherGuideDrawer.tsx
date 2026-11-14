@@ -114,16 +114,16 @@ export const TeacherGuideDrawer: React.FC<TeacherGuideDrawerProps> = ({ isOpen, 
             </div>
           </section>
 
-          {/* Studio Notes */}
+          {/* Lesson Video Notes */}
           <section className="bg-amber-50/70 p-4 rounded-xl border border-amber-200">
             <h3 className="font-bold text-amber-900 mb-1 flex items-center gap-1.5">
               <AlertCircle className="w-4 h-4 text-amber-600" />
-              Lưu ý khi Giáo viên sử dụng Studio tạo video
+              Lưu ý khi Giáo viên chuẩn bị 5. Video bài học
             </h3>
             <ul className="text-xs text-slate-700 space-y-1.5 list-disc list-inside">
-              <li>Giáo viên có thể tải file Word giáo án (.docx) để trích xuất tự động kịch bản.</li>
-              <li>Kiểm tra bản quyền ảnh: ưu tiên ảnh từ kho lưu trữ di tích văn hóa, bảo tàng, giấy phép mở CC BY/Public Domain.</li>
-              <li>Video xuất ra định dạng WebM chuẩn HTML5, có thể lưu trữ vào bộ nhớ thiết bị hoặc tải về máy tính để dạy học ngoại tuyến.</li>
+              <li>Giáo viên có thể chọn video hoàn chỉnh từ máy tính (MP4/WebM), đường dẫn chia sẻ Google Drive hoặc liên kết YouTube.</li>
+              <li>Đối với Google Drive, hãy đặt quyền chia sẻ là <strong>Bất kỳ ai có đường liên kết (Người xem)</strong> để cả lớp cùng xem được.</li>
+              <li>Nhấn <strong>SỬ DỤNG TRONG KHỞI ĐỘNG</strong> để liên kết video vào hoạt động 1 với đầy đủ thời lượng, âm thanh và thuyết minh gốc.</li>
             </ul>
           </section>
         </div>

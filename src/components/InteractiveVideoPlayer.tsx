@@ -1,17 +1,22 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { 
-  Play, 
-  Pause, 
-  RotateCcw, 
-  Volume2, 
-  VolumeX, 
-  Maximize, 
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+  Maximize,
   Minimize,
   FastForward,
-  Rewind
+  Rewind,
+  AlertCircle,
+  ExternalLink
 } from 'lucide-react';
+import { ExportedVideo, VideoSourceType } from '../types';
+import { formatVideoDuration } from '../utils/videoLinks';
 
 interface InteractiveVideoPlayerProps {
+  video?: ExportedVideo | null;
   videoUrl?: string | null;
   title?: string;
   onPlay?: () => void;
@@ -27,6 +32,7 @@ interface InteractiveVideoPlayerProps {
 }
 
 export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
+  video,
   videoUrl,
   title = 'Khám phá Thành phố Hồ Chí Minh',
   onPlay,
@@ -41,6 +47,7 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
   autoPlay = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -50,14 +57,55 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [mediaError, setMediaError] = useState<string | null>(null);
 
-  // Fallback demo video synthesizer if no exported video URL exists yet
-  // This uses a canvas loop that renders the sample lesson visuals so the player is never empty!
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const resolvedSourceType: VideoSourceType =
+    video?.sourceType ||
+    (videoUrl?.includes('youtube.com/embed')
+      ? 'youtube'
+      : videoUrl?.includes('drive.google.com/file/')
+        ? 'gdrive'
+        : 'local');
 
+  const resolvedSrc = video?.embedUrl || video?.url || videoUrl || '/video/default-lesson-hcm.webm';
+  const isEmbed = resolvedSourceType === 'youtube' || resolvedSourceType === 'gdrive';
+
+  // Reset player state cleanly when source changes
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(video?.duration && video.duration > 0 ? video.duration : 0);
+    setMediaError(null);
+  }, [resolvedSrc, video?.duration]);
+
+  // Listen to fullscreen changes
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  // Native HTML5 <video> event bindings
+  useEffect(() => {
+    if (isEmbed) return;
+    const vidEl = videoRef.current;
+    if (!vidEl) return;
+
+    const handleLoadedMetadata = () => {
+      if (vidEl.duration && !isNaN(vidEl.duration) && isFinite(vidEl.duration)) {
+        setDuration(vidEl.duration);
+        onTimeUpdate?.(vidEl.currentTime, vidEl.duration);
+      }
+      setMediaError(null);
+    };
+
+    const handleDurationChange = () => {
+      if (vidEl.duration && !isNaN(vidEl.duration) && isFinite(vidEl.duration)) {
+        setDuration(vidEl.duration);
+      }
+    };
 
     const handlePlay = () => {
       setIsPlaying(true);
@@ -66,28 +114,29 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
 
     const handlePause = () => {
       setIsPlaying(false);
-      onPause?.(video.currentTime);
+      onPause?.(vidEl.currentTime);
     };
 
     const handleTimeUpdate = () => {
-      setCurrentTime(video.currentTime);
-      setDuration(video.duration || 0);
-      onTimeUpdate?.(video.currentTime, video.duration || 0);
+      setCurrentTime(vidEl.currentTime);
+      const realDur = vidEl.duration && !isNaN(vidEl.duration) && isFinite(vidEl.duration) ? vidEl.duration : 0;
+      if (realDur > 0) setDuration(realDur);
+      onTimeUpdate?.(vidEl.currentTime, realDur);
     };
 
     const handleVolume = () => {
-      setVolume(video.volume);
-      setIsMuted(video.muted);
-      onVolumeChange?.(video.volume, video.muted);
+      setVolume(vidEl.volume);
+      setIsMuted(vidEl.muted);
+      onVolumeChange?.(vidEl.volume, vidEl.muted);
     };
 
     const handleSeeking = () => {
-      onSeeking?.(video.currentTime);
+      onSeeking?.(vidEl.currentTime);
     };
 
     const handleSeeked = () => {
-      onSeeked?.(video.currentTime);
-      onSeek?.(video.currentTime);
+      onSeeked?.(vidEl.currentTime);
+      onSeek?.(vidEl.currentTime);
     };
 
     const handleEnded = () => {
@@ -95,41 +144,112 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
       onEnded?.();
     };
 
-    video.addEventListener('play', handlePlay);
-    video.addEventListener('pause', handlePause);
-    video.addEventListener('timeupdate', handleTimeUpdate);
-    video.addEventListener('volumechange', handleVolume);
-    video.addEventListener('seeking', handleSeeking);
-    video.addEventListener('seeked', handleSeeked);
-    video.addEventListener('ended', handleEnded);
+    const handleError = () => {
+      setIsPlaying(false);
+      setMediaError('Trình duyệt không thể giải mã hoặc tải video này. Vui lòng kiểm tra định dạng (MP4 H.264/AAC hoặc WebM VP8/VP9) hoặc thay thế bằng tệp khác.');
+    };
+
+    vidEl.addEventListener('loadedmetadata', handleLoadedMetadata);
+    vidEl.addEventListener('durationchange', handleDurationChange);
+    vidEl.addEventListener('play', handlePlay);
+    vidEl.addEventListener('pause', handlePause);
+    vidEl.addEventListener('timeupdate', handleTimeUpdate);
+    vidEl.addEventListener('volumechange', handleVolume);
+    vidEl.addEventListener('seeking', handleSeeking);
+    vidEl.addEventListener('seeked', handleSeeked);
+    vidEl.addEventListener('ended', handleEnded);
+    vidEl.addEventListener('error', handleError);
 
     return () => {
-      video.removeEventListener('play', handlePlay);
-      video.removeEventListener('pause', handlePause);
-      video.removeEventListener('timeupdate', handleTimeUpdate);
-      video.removeEventListener('volumechange', handleVolume);
-      video.removeEventListener('seeking', handleSeeking);
-      video.removeEventListener('seeked', handleSeeked);
-      video.removeEventListener('ended', handleEnded);
+      vidEl.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      vidEl.removeEventListener('durationchange', handleDurationChange);
+      vidEl.removeEventListener('play', handlePlay);
+      vidEl.removeEventListener('pause', handlePause);
+      vidEl.removeEventListener('timeupdate', handleTimeUpdate);
+      vidEl.removeEventListener('volumechange', handleVolume);
+      vidEl.removeEventListener('seeking', handleSeeking);
+      vidEl.removeEventListener('seeked', handleSeeked);
+      vidEl.removeEventListener('ended', handleEnded);
+      vidEl.removeEventListener('error', handleError);
     };
-  }, [onPlay, onPause, onSeeking, onSeeked, onSeek, onVolumeChange, onTimeUpdate, onEnded]);
+  }, [isEmbed, resolvedSrc, onPlay, onPause, onSeeking, onSeeked, onSeek, onVolumeChange, onTimeUpdate, onEnded]);
+
+  // YouTube postMessage telemetry listener (for LuyenTap practice tracking when a YouTube video is active)
+  useEffect(() => {
+    if (resolvedSourceType !== 'youtube') return;
+
+    let lastYtTime = 0;
+    const handleMessage = (event: MessageEvent) => {
+      if (!event.origin.includes('youtube.com')) return;
+      try {
+        const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+        if (!data || !data.info) return;
+
+        const info = data.info;
+        if (typeof info.playerState === 'number') {
+          if (info.playerState === 1) {
+            setIsPlaying(true);
+            onPlay?.();
+          } else if (info.playerState === 2) {
+            setIsPlaying(false);
+            onPause?.(info.currentTime ?? lastYtTime);
+          } else if (info.playerState === 0) {
+            setIsPlaying(false);
+            onEnded?.();
+          }
+        }
+        if (typeof info.currentTime === 'number') {
+          const jump = Math.abs(info.currentTime - lastYtTime);
+          if (jump > 2.2) {
+            onSeeking?.(info.currentTime);
+            onSeeked?.(info.currentTime);
+            onSeek?.(info.currentTime);
+          }
+          lastYtTime = info.currentTime;
+          setCurrentTime(info.currentTime);
+          onTimeUpdate?.(info.currentTime, info.duration || 0);
+        }
+        if (typeof info.volume === 'number' || typeof info.muted === 'boolean') {
+          onVolumeChange?.((info.volume ?? 100) / 100, !!info.muted);
+        }
+      } catch {
+        // Ignore non-JSON messages
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [resolvedSourceType, onPlay, onPause, onSeeking, onSeeked, onSeek, onVolumeChange, onTimeUpdate, onEnded]);
+
+  const handleIframeLoad = () => {
+    if (resolvedSourceType === 'youtube' && iframeRef.current?.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage(
+          JSON.stringify({ event: 'listening', id: 'lesson-yt-player' }),
+          '*'
+        );
+      } catch {
+        // Ignore
+      }
+    }
+  };
 
   const togglePlay = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused || video.ended) {
-      video.play().catch(e => console.warn('Play interrupted:', e));
+    const vidEl = videoRef.current;
+    if (!vidEl) return;
+    if (vidEl.paused || vidEl.ended) {
+      vidEl.play().catch(e => console.warn('Play interrupted:', e));
     } else {
-      video.pause();
+      vidEl.pause();
     }
   };
 
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const targetTime = parseFloat(e.target.value);
     setCurrentTime(targetTime);
-    const video = videoRef.current;
-    if (video) {
-      video.currentTime = targetTime;
+    const vidEl = videoRef.current;
+    if (vidEl) {
+      vidEl.currentTime = targetTime;
     }
     onSeeking?.(targetTime);
     onSeeked?.(targetTime);
@@ -138,37 +258,37 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newVol = parseFloat(e.target.value);
-    const video = videoRef.current;
-    if (!video) return;
-    video.volume = newVol;
-    video.muted = newVol === 0;
+    const vidEl = videoRef.current;
+    if (!vidEl) return;
+    vidEl.volume = newVol;
+    vidEl.muted = newVol === 0;
     setVolume(newVol);
-    setIsMuted(video.muted);
+    setIsMuted(vidEl.muted);
   };
 
   const toggleMute = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.muted = !video.muted;
-    setIsMuted(video.muted);
+    const vidEl = videoRef.current;
+    if (!vidEl) return;
+    vidEl.muted = !vidEl.muted;
+    setIsMuted(vidEl.muted);
   };
 
   const handleReplay = () => {
-    const video = videoRef.current;
+    const vidEl = videoRef.current;
     setCurrentTime(0);
-    if (video) {
-      video.currentTime = 0;
-      video.play().catch(() => {});
+    if (vidEl) {
+      vidEl.currentTime = 0;
+      vidEl.play().catch(() => {});
     }
   };
 
   const skipSeconds = (sec: number) => {
-    const video = videoRef.current;
-    const maxDur = duration || video?.duration || 100;
-    const newTime = Math.max(0, Math.min(currentTime + sec, maxDur));
+    const vidEl = videoRef.current;
+    const maxDur = duration || vidEl?.duration || 0;
+    const newTime = Math.max(0, maxDur > 0 ? Math.min(currentTime + sec, maxDur) : currentTime + sec);
     setCurrentTime(newTime);
-    if (video) {
-      video.currentTime = newTime;
+    if (vidEl) {
+      vidEl.currentTime = newTime;
     }
     onSeeking?.(newTime);
     onSeeked?.(newTime);
@@ -185,348 +305,206 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
     }
   };
 
-  const formatTime = (secs: number) => {
-    if (isNaN(secs) || secs < 0) return '00:00';
-    const m = Math.floor(secs / 60);
-    const s = Math.floor(secs % 60);
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
+  const displayDuration = duration > 0 ? duration : (video?.duration && video.duration > 0 ? video.duration : 0);
 
   return (
-    <div 
+    <div
       ref={containerRef}
       className={`relative group bg-slate-950 rounded-2xl overflow-hidden shadow-xl aspect-video flex flex-col justify-end select-none ${className}`}
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => setShowControls(isPlaying ? false : true)}
     >
-      {/* Video Element */}
-      {videoUrl ? (
-        <video
-          ref={videoRef}
-          src={videoUrl}
-          playsInline
-          autoPlay={autoPlay}
-          className="w-full h-full object-contain cursor-pointer"
-          onClick={togglePlay}
-        />
-      ) : (
-        /* Fallback Interactive Player with Sample Visuals */
-        <DefaultSampleCanvasPlayer
-          ref={videoRef}
-          isPlaying={isPlaying}
-          setIsPlaying={setIsPlaying}
-          currentTime={currentTime}
-          setCurrentTime={setCurrentTime}
-          duration={duration}
-          setDuration={setDuration}
-          volume={volume}
-          isMuted={isMuted}
-          onPlay={onPlay}
-          onPause={onPause}
-          onSeeking={onSeeking}
-          onSeeked={onSeeked}
-          onSeek={onSeek}
-          onEnded={onEnded}
-          togglePlay={togglePlay}
-        />
-      )}
-
-      {/* Top Banner on Hover */}
-      <div className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent transition-opacity duration-300 pointer-events-none ${showControls ? 'opacity-100' : 'opacity-0'}`}>
-        <div className="flex items-center justify-between text-white">
-          <div className="flex items-center gap-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-            <h3 className="text-sm sm:text-base font-semibold font-display truncate max-w-md">
-              {title}
-            </h3>
-          </div>
-          <span className="text-xs text-white/80 hidden sm:inline">
-            Tin học 4 · Bài 12A
-          </span>
-        </div>
-      </div>
-
-      {/* Center Big Play Button (when paused) */}
-      {!isPlaying && (
-        <button
-          onClick={togglePlay}
-          className="absolute inset-0 m-auto w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-sky-500/90 text-white flex items-center justify-center hover:bg-sky-400 hover:scale-105 active:scale-95 transition-all shadow-2xl z-10"
-          title="Nhấn để phát video"
-        >
-          <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white translate-x-0.5" />
-        </button>
-      )}
-
-      {/* Bottom Controls Bar */}
-      <div className={`absolute bottom-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-t from-black/90 via-black/70 to-transparent transition-opacity duration-200 ${showControls ? 'opacity-100' : 'opacity-0'}`}>
-        {/* Progress Bar (Seek) */}
-        <div className="flex items-center gap-3 mb-2 sm:mb-3">
-          <span className="text-xs font-mono tabular-nums text-white/90 shrink-0">
-            {formatTime(currentTime)}
-          </span>
-          <div className="relative flex-1 flex items-center group/seek">
-            <input
-              type="range"
-              min={0}
-              max={duration || 100}
-              step={0.1}
-              value={currentTime}
-              onChange={handleSeekChange}
-              className="w-full h-2 bg-white/30 rounded-lg appearance-none cursor-pointer accent-sky-400 hover:h-2.5 transition-all"
-              title="Kéo tua video"
-            />
-          </div>
-          <span className="text-xs font-mono tabular-nums text-white/70 shrink-0">
-            {formatTime(duration || 100)}
-          </span>
-        </div>
-
-        {/* Buttons Row */}
-        <div className="flex items-center justify-between gap-2 text-white">
-          <div className="flex items-center gap-1 sm:gap-2">
-            {/* Play/Pause */}
-            <button
-              onClick={togglePlay}
-              className="p-2 sm:p-2.5 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
-              title={isPlaying ? 'Tạm dừng (Pause)' : 'Phát (Play)'}
-            >
-              {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
-            </button>
-
-            {/* Replay */}
-            <button
-              onClick={handleReplay}
-              className="p-2 sm:p-2.5 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
-              title="Xem lại từ đầu (Replay)"
-            >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-
-            {/* Skip -5s / +5s */}
-            <button
-              onClick={() => skipSeconds(-5)}
-              className="hidden sm:inline-flex p-2 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
-              title="Lùi lại 5 giây"
-            >
-              <Rewind className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => skipSeconds(5)}
-              className="hidden sm:inline-flex p-2 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
-              title="Tua tới 5 giây"
-            >
-              <FastForward className="w-4 h-4" />
-            </button>
-
-            {/* Volume Control */}
-            <div className="flex items-center gap-1.5 ml-2 group/vol">
-              <button
-                onClick={toggleMute}
-                className="p-2 rounded-xl hover:bg-white/20 transition-all"
-                title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng (Mute)'}
+      {/* Embed Player for YouTube / Google Drive */}
+      {isEmbed ? (
+        <>
+          <iframe
+            ref={iframeRef}
+            key={resolvedSrc}
+            src={resolvedSrc}
+            title={title}
+            onLoad={handleIframeLoad}
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+            allowFullScreen
+            className="w-full h-full border-0"
+          />
+          <div className="absolute top-3 right-3 z-20 flex items-center gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            {video?.originalUrl && (
+              <a
+                href={video.originalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white text-xs font-medium flex items-center gap-1 backdrop-blur-xs border border-white/15"
+                title="Mở liên kết gốc ở tab mới"
               >
-                {isMuted || volume === 0 ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={isMuted ? 0 : volume}
-                onChange={handleVolumeChange}
-                className="w-16 sm:w-24 h-1.5 bg-white/30 rounded-lg appearance-none cursor-pointer accent-sky-400"
-                title={`Âm lượng: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
-              />
-            </div>
-          </div>
-
-          {/* Right Tools */}
-          <div className="flex items-center gap-2">
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Mở gốc</span>
+              </a>
+            )}
             <button
+              type="button"
               onClick={toggleFullscreen}
-              className="p-2 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
+              className="p-2 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white backdrop-blur-xs border border-white/15 transition-colors"
               title={isFullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình (Fullscreen)'}
             >
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
             </button>
           </div>
-        </div>
-      </div>
+        </>
+      ) : (
+        <>
+          {/* Native HTML5 <video> Player (Local computer MP4/WebM or default) */}
+          <video
+            ref={videoRef}
+            key={resolvedSrc}
+            src={resolvedSrc}
+            preload="metadata"
+            playsInline
+            autoPlay={autoPlay}
+            className="w-full h-full object-contain cursor-pointer"
+            onClick={togglePlay}
+          />
+
+          {/* Error overlay if codec / file fails */}
+          {mediaError && (
+            <div className="absolute inset-0 bg-slate-950/90 text-white flex flex-col items-center justify-center p-6 text-center z-20">
+              <AlertCircle className="w-10 h-10 text-rose-400 mb-3" />
+              <p className="text-sm font-bold mb-1">Không thể phát tệp video này</p>
+              <p className="text-xs text-slate-300 max-w-md leading-relaxed">{mediaError}</p>
+            </div>
+          )}
+
+          {/* Top Banner on Hover */}
+          <div
+            className={`absolute top-0 inset-x-0 p-4 bg-gradient-to-b from-black/80 via-black/40 to-transparent transition-opacity duration-300 pointer-events-none ${
+              showControls ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            <div className="flex items-center justify-between text-white">
+              <h3 className="text-sm sm:text-base font-semibold font-display truncate max-w-md">
+                {title}
+              </h3>
+              <span className="text-xs text-white/80 hidden sm:inline">
+                Tin học 4 · Bài 12A
+              </span>
+            </div>
+          </div>
+
+          {/* Center Big Play Button (when paused and no error) */}
+          {!isPlaying && !mediaError && (
+            <button
+              type="button"
+              onClick={togglePlay}
+              className="absolute inset-0 m-auto w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-sky-500/90 text-white flex items-center justify-center hover:bg-sky-400 hover:scale-105 active:scale-95 transition-all shadow-2xl z-10"
+              title="Nhấn để phát video"
+            >
+              <Play className="w-8 h-8 sm:w-10 sm:h-10 fill-white translate-x-0.5" />
+            </button>
+          )}
+
+          {/* Bottom Controls Bar */}
+          <div
+            className={`absolute bottom-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-t from-black/90 via-black/70 to-transparent transition-opacity duration-200 ${
+              showControls ? 'opacity-100' : 'opacity-0'
+            }`}
+          >
+            {/* Progress Bar (Seek) */}
+            <div className="flex items-center gap-3 mb-2 sm:mb-3">
+              <span className="text-xs font-mono tabular-nums text-white/90 shrink-0">
+                {formatVideoDuration(currentTime)}
+              </span>
+              <div className="relative flex-1 flex items-center group/seek">
+                <input
+                  type="range"
+                  min={0}
+                  max={displayDuration > 0 ? displayDuration : 100}
+                  step={0.1}
+                  value={currentTime}
+                  onChange={handleSeekChange}
+                  disabled={displayDuration <= 0}
+                  className="w-full h-2 bg-white/30 rounded-lg appearance-none cursor-pointer accent-sky-400 hover:h-2.5 transition-all"
+                  title="Kéo tua video"
+                />
+              </div>
+              <span className="text-xs font-mono tabular-nums text-white/70 shrink-0">
+                {displayDuration > 0 ? formatVideoDuration(displayDuration) : '--:--'}
+              </span>
+            </div>
+
+            {/* Buttons Row */}
+            <div className="flex items-center justify-between gap-2 text-white">
+              <div className="flex items-center gap-1 sm:gap-2">
+                <button
+                  type="button"
+                  onClick={togglePlay}
+                  className="p-2 sm:p-2.5 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
+                  title={isPlaying ? 'Tạm dừng (Pause)' : 'Phát (Play)'}
+                >
+                  {isPlaying ? <Pause className="w-5 h-5 fill-white" /> : <Play className="w-5 h-5 fill-white" />}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleReplay}
+                  className="p-2 sm:p-2.5 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
+                  title="Xem lại từ đầu (Replay)"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => skipSeconds(-5)}
+                  className="hidden sm:inline-flex p-2 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
+                  title="Lùi lại 5 giây"
+                >
+                  <Rewind className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => skipSeconds(5)}
+                  className="hidden sm:inline-flex p-2 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
+                  title="Tua tới 5 giây"
+                >
+                  <FastForward className="w-4 h-4" />
+                </button>
+
+                {/* Volume Control */}
+                <div className="flex items-center gap-1.5 ml-2 group/vol">
+                  <button
+                    type="button"
+                    onClick={toggleMute}
+                    className="p-2 rounded-xl hover:bg-white/20 transition-all"
+                    title={isMuted ? 'Bật âm thanh' : 'Tắt tiếng (Mute)'}
+                  >
+                    {isMuted || volume === 0 ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={isMuted ? 0 : volume}
+                    onChange={handleVolumeChange}
+                    className="w-16 sm:w-24 h-1.5 bg-white/30 rounded-lg appearance-none cursor-pointer accent-sky-400"
+                    title={`Âm lượng: ${Math.round((isMuted ? 0 : volume) * 100)}%`}
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  className="p-2 rounded-xl hover:bg-white/20 active:scale-95 transition-all"
+                  title={isFullscreen ? 'Thoát toàn màn hình' : 'Toàn màn hình (Fullscreen)'}
+                >
+                  {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
-
-// Internal Default Player that animates when no external video file has been exported yet
-const DefaultSampleCanvasPlayer = React.forwardRef<HTMLVideoElement, any>((props, ref) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef<number | null>(null);
-  const startTimeRef = useRef<number>(0);
-
-  const scenes = [
-    {
-      title: '1. Giới thiệu Thành phố Hồ Chí Minh',
-      desc: 'Thành phố trẻ trung, năng động bên dòng sông Sài Gòn',
-      img: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Ho_Chi_Minh_City_skyline_%282022%29.jpg/800px-Ho_Chi_Minh_City_skyline_%282022%29.jpg',
-      color: '#0284c7',
-      duration: 15,
-    },
-    {
-      title: '2. Bến Nhà Rồng lịch sử (Bảo tàng Hồ Chí Minh)',
-      desc: 'Nơi Bác Hồ ra đi tìm đường cứu nước ngày 5/6/1911',
-      img: 'https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/Nha_Rong_Harbour_02.jpg/800px-Nha_Rong_Harbour_02.jpg',
-      color: '#b91c1c',
-      duration: 15,
-    },
-    {
-      title: '3. Dinh Độc Lập - Mốc son Thống nhất 30/4/1975',
-      desc: 'Di tích Lịch sử Quốc gia Đặc biệt ghi dấu ngày non sông thu về một mối',
-      img: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Reunification_Palace%2C_Ho_Chi_Minh_City_%285%29.jpg/800px-Reunification_Palace%2C_Ho_Chi_Minh_City_%285%29.jpg',
-      color: '#d97706',
-      duration: 15,
-    },
-    {
-      title: '4. Bưu điện Trung tâm Thành phố Hồ Chí Minh',
-      desc: 'Kiến trúc di sản cổ kính hơn 130 năm tuổi với mái vòm châu Âu',
-      img: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Saigon_Central_Post_Office_in_2020.jpg/800px-Saigon_Central_Post_Office_in_2020.jpg',
-      color: '#4f46e5',
-      duration: 15,
-    },
-    {
-      title: '5. Em yêu Thành phố Hồ Chí Minh',
-      desc: 'Sử dụng công cụ đa phương tiện để học tập và khám phá thế giới',
-      img: 'https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Saigon_Opera_House_by_night.jpg/800px-Saigon_Opera_House_by_night.jpg',
-      color: '#059669',
-      duration: 15,
-    },
-  ];
-
-  const totalDuration = scenes.reduce((a, b) => a + b.duration, 0);
-
-  useEffect(() => {
-    props.setDuration(totalDuration);
-  }, [totalDuration]);
-
-  // Preload images
-  const loadedImgsRef = useRef<HTMLImageElement[]>([]);
-  useEffect(() => {
-    scenes.forEach((s, idx) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.src = s.img;
-      img.onload = () => {
-        loadedImgsRef.current[idx] = img;
-      };
-    });
-  }, []);
-
-  // Animation Loop
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let lastTick = performance.now();
-
-    const loop = (now: number) => {
-      const dt = (now - lastTick) / 1000;
-      lastTick = now;
-
-      if (props.isPlaying) {
-        let nextTime = props.currentTime + dt;
-        if (nextTime >= totalDuration) {
-          nextTime = 0;
-          props.setIsPlaying(false);
-          props.onEnded?.();
-        }
-        props.setCurrentTime(nextTime);
-      }
-
-      // Draw Current Scene on Canvas
-      drawFrame(ctx, canvas.width, canvas.height, props.currentTime);
-
-      animFrameRef.current = requestAnimationFrame(loop);
-    };
-
-    animFrameRef.current = requestAnimationFrame(loop);
-
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
-  }, [props.isPlaying, props.currentTime, totalDuration]);
-
-  const drawFrame = (ctx: CanvasRenderingContext2D, w: number, h: number, time: number) => {
-    ctx.clearRect(0, 0, w, h);
-
-    // Find active scene
-    let accumulated = 0;
-    let activeIndex = 0;
-    let sceneTime = 0;
-
-    for (let i = 0; i < scenes.length; i++) {
-      if (time >= accumulated && time < accumulated + scenes[i].duration) {
-        activeIndex = i;
-        sceneTime = time - accumulated;
-        break;
-      }
-      accumulated += scenes[i].duration;
-    }
-
-    const scene = scenes[activeIndex];
-    const img = loadedImgsRef.current[activeIndex];
-    const progress = sceneTime / scene.duration;
-
-    // Draw background image or stylized background
-    if (img && img.complete && img.naturalWidth > 0) {
-      const zoom = 1.0 + progress * 0.06;
-      ctx.save();
-      ctx.translate(w / 2, h / 2);
-      ctx.scale(zoom, zoom);
-      ctx.translate(-w / 2, -h / 2);
-      ctx.drawImage(img, 0, 0, w, h);
-      ctx.restore();
-    } else {
-      // Fallback gradient
-      const grad = ctx.createLinearGradient(0, 0, w, h);
-      grad.addColorStop(0, '#0f172a');
-      grad.addColorStop(1, scene.color);
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, w, h);
-    }
-
-    // Gradient Scrim
-    const scrim = ctx.createLinearGradient(0, h * 0.4, 0, h);
-    scrim.addColorStop(0, 'rgba(15, 23, 42, 0)');
-    scrim.addColorStop(0.6, 'rgba(15, 23, 42, 0.7)');
-    scrim.addColorStop(1, 'rgba(15, 23, 42, 0.95)');
-    ctx.fillStyle = scrim;
-    ctx.fillRect(0, h * 0.4, w, h * 0.6);
-
-    // Title & Scene description
-    ctx.fillStyle = '#38bdf8';
-    ctx.font = 'bold 26px "Outfit", "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(scene.title, 40, h - 130);
-
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = '500 18px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(scene.desc, 40, h - 90);
-
-    // Attribution
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
-    ctx.font = '400 13px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText('Tư liệu lịch sử & văn hóa TP.HCM · Bài 12A Tin học Lớp 4', 40, h - 60);
-  };
-
-  return (
-    <div className="relative w-full h-full cursor-pointer" onClick={props.togglePlay}>
-      <canvas
-        ref={canvasRef}
-        width={1280}
-        height={720}
-        className="w-full h-full object-contain"
-      />
-      {/* Hidden dummy video tag so standard video refs don't crash */}
-      <video ref={ref} className="hidden" />
-    </div>
-  );
-});

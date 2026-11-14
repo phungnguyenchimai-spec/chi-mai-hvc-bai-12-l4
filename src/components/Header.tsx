@@ -39,7 +39,7 @@ export const Header: React.FC<HeaderProps> = ({
     { id: 'kham_pha', label: '2. Khám phá', icon: Compass },
     { id: 'luyen_tap', label: '3. Luyện tập', icon: Gamepad2 },
     { id: 'van_dung', label: '4. Vận dụng', icon: Users },
-    { id: 'studio', label: '5. Studio tạo video', icon: Clapperboard },
+    { id: 'studio', label: '5. Video bài học', icon: Clapperboard },
   ];
 
   return (

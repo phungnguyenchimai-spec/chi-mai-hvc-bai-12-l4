@@ -80,8 +80,17 @@ export const KhoiDongSection: React.FC<KhoiDongSectionProps> = ({
           
           {exportedVideo && (
             <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/20 text-xs font-medium backdrop-blur-xs">
-              <Video className="w-4 h-4 text-emerald-300" />
-              <span>Đang sử dụng video do Giáo viên xuất từ Studio ({exportedVideo.filename})</span>
+              <Video className="w-4 h-4 text-emerald-300 shrink-0" />
+              <span>
+                Video bài học: {exportedVideo.filename}
+                {exportedVideo.sourceType === 'youtube'
+                  ? ' · YouTube'
+                  : exportedVideo.sourceType === 'gdrive'
+                    ? ' · Google Drive'
+                    : exportedVideo.sourceType === 'local'
+                      ? ' · Tệp từ máy tính'
+                      : ' · Video mẫu'}
+              </span>
             </div>
           )}
         </div>
@@ -93,8 +102,9 @@ export const KhoiDongSection: React.FC<KhoiDongSectionProps> = ({
         <div className="lg:col-span-7 space-y-4">
           <div className="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-xs">
             <InteractiveVideoPlayer
-              videoUrl={exportedVideo?.url || null}
-              title={exportedVideo ? 'Video bài học đã duyệt' : 'Dự án mẫu: Khám phá TP. Hồ Chí Minh'}
+              video={exportedVideo}
+              videoUrl={exportedVideo?.embedUrl || exportedVideo?.url || '/video/default-lesson-hcm.webm'}
+              title={exportedVideo?.filename ? `Video bài học: ${exportedVideo.filename}` : 'Video bài học: Toàn cảnh Thành phố Hồ Chí Minh'}
               className="w-full"
             />
           </div>
