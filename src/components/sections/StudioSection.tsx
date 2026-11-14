@@ -14,6 +14,7 @@ import {
   formatVideoDuration,
   formatFileSize,
   getSourceLabel,
+  checkYouTubeVideoClient,
 } from '../../utils/videoLinks';
 import confetti from 'canvas-confetti';
 import {
@@ -39,6 +40,7 @@ import {
   ShieldAlert,
   Eye,
   Info,
+  Share2,
 } from 'lucide-react';
 
 interface StudioSectionProps {
@@ -324,9 +326,9 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
         isUploaded: true,
         isDefault: false,
         storageNote: saveResult.saved
-          ? 'Đã lưu vào bộ nhớ IndexedDB trên thiết bị để tự động mở lại khi tải lại trang.'
+          ? 'Video đã lưu cục bộ trong IndexedDB của trình duyệt này để mở lại trên thiết bị hiện tại. Lưu ý: video tải từ máy không tự đồng bộ sang thiết bị khác và không được lưu trên máy chủ Vercel.'
           : saveResult.message ||
-            'Video đang phát trực tiếp từ máy tính trong phiên làm việc này (chưa lưu ngoại tuyến do hạn mức bộ nhớ trình duyệt).',
+            'Video đang phát trực tiếp từ máy tính trong phiên làm việc này (chỉ phát cục bộ trên thiết bị hiện tại, không lưu trên Vercel).',
       };
 
       setCurrentTime(0);
@@ -375,24 +377,27 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
     try {
       let accessible = true;
       let title = `Video Google Drive (${parsed.id.slice(0, 8)}...)`;
-      let statusMsg = 'Đã kết nối trình phát nhúng Google Drive.';
-      let isWarning = false;
+      let statusMsg =
+        'Đã chuyển sang đường dẫn nhúng Google Drive (/preview). Lưu ý: khả năng phát trên thiết bị khác phụ thuộc vào quyền chia sẻ công khai và chính sách cookie của trình duyệt.';
+      let isWarning = true;
 
-      try {
-        const checkResp = await fetch('/api/check-video-link', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'gdrive', id: parsed.id, originalUrl: parsed.originalUrl }),
-        });
-        if (checkResp.ok) {
-          const checkData = await checkResp.json();
-          accessible = checkData.accessible !== false;
-          if (checkData.title) title = checkData.title;
-          if (checkData.message) statusMsg = checkData.message;
-          isWarning = !!checkData.warning;
+      if (import.meta.env.DEV) {
+        try {
+          const checkResp = await fetch('/api/check-video-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: 'gdrive', id: parsed.id, originalUrl: parsed.originalUrl }),
+          });
+          if (checkResp.ok) {
+            const checkData = await checkResp.json();
+            accessible = checkData.accessible !== false;
+            if (checkData.title) title = checkData.title;
+            if (checkData.message) statusMsg = checkData.message;
+            isWarning = !!checkData.warning;
+          }
+        } catch {
+          isWarning = true;
         }
-      } catch {
-        isWarning = true;
       }
 
       const now = Date.now();
@@ -412,7 +417,6 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
         accessMessage: statusMsg,
       };
 
-      // Persist URL & metadata in IndexedDB AND server JSON for multi-device access
       await saveActiveVideoSourceMeta({
         sourceType: 'gdrive',
         originalUrl: parsed.originalUrl,
@@ -426,15 +430,30 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
         accessMessage: statusMsg,
       });
 
-      await fetch('/api/lesson-video-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newVideoObj),
-      }).catch(() => {});
+      let savedInSharedConfig = false;
+      if (import.meta.env.DEV) {
+        try {
+          const saveResp = await fetch('/api/lesson-video-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...newVideoObj, useInKhoiDong: true }),
+          });
+          if (saveResp.ok) {
+            const saveJson = await saveResp.json();
+            savedInSharedConfig = !!saveJson.savedInSharedConfig;
+          }
+        } catch {
+          // Non-fatal
+        }
+      }
+
+      const deployNote = savedInSharedConfig
+        ? ' Đã ghi vào cấu hình dùng chung (src/config/lessonVideoConfig.ts) để triển khai GitHub/Vercel.'
+        : ' Đã lưu trên trình duyệt này (IndexedDB). Muốn cố định cho mọi thiết bị khi deploy Vercel mà không dùng database, hãy lưu trong môi trường mã nguồn trước khi push GitHub.';
 
       setLinkStatus({
         type: !accessible ? 'error' : isWarning ? 'warning' : 'success',
-        message: statusMsg,
+        message: statusMsg + (accessible ? deployNote : ''),
         showDriveGuide: !accessible || isWarning,
       });
 
@@ -467,27 +486,12 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
 
     setIsProcessing(true);
     try {
-      let accessible = true;
-      let title = `Video YouTube (${parsed.id})`;
-      let statusMsg = 'Video YouTube sẵn sàng phát (hỗ trợ Công khai & Không công khai).';
-      let isWarning = false;
-
-      try {
-        const checkResp = await fetch('/api/check-video-link', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'youtube', id: parsed.id, originalUrl: parsed.originalUrl }),
-        });
-        if (checkResp.ok) {
-          const checkData = await checkResp.json();
-          accessible = checkData.accessible !== false;
-          if (checkData.title) title = checkData.title;
-          if (checkData.message) statusMsg = checkData.message;
-          isWarning = !!checkData.warning;
-        }
-      } catch {
-        isWarning = true;
-      }
+      // Kiểm tra trực tiếp từ trình duyệt qua YouTube oEmbed (CORS, không cần API Key, hoạt động cả trên Vercel)
+      const checkData = await checkYouTubeVideoClient(parsed.id);
+      const accessible = checkData.accessible;
+      const title = checkData.title || `Video YouTube (${parsed.id})`;
+      const statusMsg = checkData.message;
+      const isWarning = !!checkData.warning;
 
       const now = Date.now();
       const newVideoObj: ExportedVideo = {
@@ -506,7 +510,6 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
         accessMessage: statusMsg,
       };
 
-      // Persist URL & metadata in IndexedDB AND server JSON for multi-device access
       await saveActiveVideoSourceMeta({
         sourceType: 'youtube',
         originalUrl: parsed.originalUrl,
@@ -520,15 +523,30 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
         accessMessage: statusMsg,
       });
 
-      await fetch('/api/lesson-video-link', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newVideoObj),
-      }).catch(() => {});
+      let savedInSharedConfig = false;
+      if (import.meta.env.DEV) {
+        try {
+          const saveResp = await fetch('/api/lesson-video-link', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...newVideoObj, useInKhoiDong: true }),
+          });
+          if (saveResp.ok) {
+            const saveJson = await saveResp.json();
+            savedInSharedConfig = !!saveJson.savedInSharedConfig;
+          }
+        } catch {
+          // Non-fatal
+        }
+      }
+
+      const deployNote = savedInSharedConfig
+        ? ' Đã lưu vào cấu hình dùng chung (src/config/lessonVideoConfig.ts) để đồng bộ khi đẩy lên GitHub và Vercel.'
+        : ' Đã lưu trên trình duyệt này (IndexedDB). Để mọi học sinh trên mọi thiết bị đều tự động thấy cùng video này trên Vercel, cần lưu vào tệp cấu hình src/config/lessonVideoConfig.ts trước khi deploy hoặc chia sẻ link kèm ?yt=' + parsed.id + '.';
 
       setLinkStatus({
         type: !accessible ? 'error' : isWarning ? 'warning' : 'success',
-        message: statusMsg,
+        message: statusMsg + (accessible ? deployNote : ''),
       });
 
       setCurrentTime(0);
@@ -575,7 +593,9 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
 
     await deleteExportedVideoBlob('active-exported-video');
     await clearActiveVideoSourceMeta();
-    await fetch('/api/lesson-video-link', { method: 'DELETE' }).catch(() => {});
+    if (import.meta.env.DEV) {
+      await fetch('/api/lesson-video-link', { method: 'DELETE' }).catch(() => {});
+    }
 
     setDriveInput('');
     setYoutubeInput('');
@@ -598,10 +618,21 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
     showToast('Đã xóa video đã chọn và khôi phục video mẫu mặc định.');
   };
 
-  const handleUseInKhoiDong = () => {
+  const handleUseInKhoiDong = async () => {
     if (!exportedVideo) {
       setErrorMessage('Vui lòng chọn hoặc liên kết một video trước khi sử dụng trong Khởi động.');
       return;
+    }
+
+    if (
+      import.meta.env.DEV &&
+      (exportedVideo.sourceType === 'youtube' || exportedVideo.sourceType === 'gdrive')
+    ) {
+      await fetch('/api/lesson-video-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...exportedVideo, useInKhoiDong: true }),
+      }).catch(() => {});
     }
 
     confetti({
@@ -1080,9 +1111,9 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
 
         {/* Helpful Google Drive permission note right below embed when Drive is active */}
         {currentSourceType === 'gdrive' && (
-          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-xs text-slate-600 flex flex-wrap items-center justify-between gap-3">
+          <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200 text-xs text-slate-700 flex flex-wrap items-center justify-between gap-3">
             <span>
-              Nếu khung Google Drive báo cần quyền truy cập hoặc chưa phát được, Thầy/Cô hãy kiểm tra quyền chia sẻ tệp là <strong>Bất kỳ ai có đường liên kết (Người xem)</strong>.
+              <strong>Lưu ý về Google Drive:</strong> Cần đặt quyền chia sẻ tệp là <strong>Bất kỳ ai có đường liên kết (Người xem)</strong>. Ngoài ra, trình phát nhúng Google Drive phụ thuộc chính sách cookie của từng trình duyệt và không ổn định bằng YouTube trên mọi thiết bị.
             </span>
             {exportedVideo?.originalUrl && (
               <a
@@ -1091,7 +1122,7 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-sky-700 font-semibold hover:underline whitespace-nowrap"
               >
-                <span>Mở trên Google Drive</span>
+                <span>Kiểm tra tệp trên Drive</span>
                 <ExternalLink className="w-3.5 h-3.5" />
               </a>
             )}
@@ -1128,6 +1159,26 @@ export const StudioSection: React.FC<StudioSectionProps> = ({
               {isFullscreen ? <Minimize2 className="w-4 h-4 text-slate-700" /> : <Maximize2 className="w-4 h-4 text-slate-700" />}
               <span>Toàn màn hình</span>
             </button>
+
+            {(currentSourceType === 'youtube' || currentSourceType === 'gdrive') && exportedVideo?.externalId && (
+              <button
+                type="button"
+                onClick={() => {
+                  const paramKey = currentSourceType === 'youtube' ? 'yt' : 'gd';
+                  const shareUrl = `${window.location.origin}/?${paramKey}=${encodeURIComponent(exportedVideo.externalId || '')}`;
+                  navigator.clipboard?.writeText(shareUrl).then(() => {
+                    showToast('Đã sao chép liên kết bài học để gửi cho học sinh xem trên mọi thiết bị!');
+                  }).catch(() => {
+                    showToast(`Liên kết chia sẻ: ${shareUrl}`);
+                  });
+                }}
+                className="py-2.5 px-4 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 text-xs sm:text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap"
+                title="Sao chép đường dẫn mở thẳng video này trên điện thoại hoặc máy tính khác"
+              >
+                <Share2 className="w-4 h-4 text-sky-600" />
+                <span>Sao chép link lớp học</span>
+              </button>
+            )}
 
             {exportedVideo?.isUploaded && !confirmingDelete && (
               <button

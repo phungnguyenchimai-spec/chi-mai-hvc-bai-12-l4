@@ -8,6 +8,38 @@ import { VanDungSection } from './components/sections/VanDungSection';
 import { StudioSection } from './components/sections/StudioSection';
 import { AppMode, AppTab, ExportedVideo } from './types';
 import { loadExportedVideoBlob, loadActiveVideoSourceMeta } from './utils/db';
+import { SHARED_LESSON_VIDEO_CONFIG } from './config/lessonVideoConfig';
+import { parseGoogleDriveUrl, parseYouTubeUrl } from './utils/videoLinks';
+
+function buildSharedFallbackVideo(): ExportedVideo {
+  const cfg = SHARED_LESSON_VIDEO_CONFIG;
+  if (cfg.sourceType === 'youtube' || cfg.sourceType === 'gdrive') {
+    return {
+      sourceType: cfg.sourceType,
+      url: cfg.embedUrl,
+      embedUrl: cfg.embedUrl,
+      originalUrl: cfg.originalUrl,
+      externalId: cfg.videoId,
+      filename: cfg.title,
+      duration: 0,
+      sizeBytes: 0,
+      timestamp: cfg.updatedAt || Date.now(),
+      isUploaded: true,
+      isDefault: false,
+      accessible: true,
+    };
+  }
+  return {
+    sourceType: 'default',
+    url: cfg.embedUrl || '/video/default-lesson-hcm.webm',
+    filename: cfg.title || 'KhamPha_TPHCM_HD720p.webm',
+    duration: 18.6,
+    sizeBytes: 1958608,
+    timestamp: cfg.updatedAt || 0,
+    isDefault: true,
+    isUploaded: false,
+  };
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('khoi_dong');
@@ -15,33 +47,98 @@ export default function App() {
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [showTeacherGuide, setShowTeacherGuide] = useState<boolean>(false);
 
-  // Active Lesson Video (local blob, Google Drive embed, YouTube embed, or default sample)
-  const [exportedVideo, setExportedVideo] = useState<ExportedVideo | null>(null);
+  // Khởi tạo ngay từ cấu hình dùng chung (bundled cho Vercel/GitHub)
+  const [exportedVideo, setExportedVideo] = useState<ExportedVideo | null>(() => buildSharedFallbackVideo());
 
-  // Restore saved video source on startup (IndexedDB for local/device + API for multi-device links)
   useEffect(() => {
     async function initStorage() {
       try {
+        // 1. Hỗ trợ tham số chia sẻ trực tiếp qua URL (?yt=VIDEO_ID hoặc ?gd=FILE_ID) nếu có
+        const params = new URLSearchParams(window.location.search);
+        const ytParam = params.get('yt');
+        const gdParam = params.get('gd');
+
+        if (ytParam) {
+          const parsedYt = parseYouTubeUrl(
+            ytParam.length === 11 ? `https://www.youtube.com/watch?v=${ytParam}` : ytParam
+          );
+          if (parsedYt.valid) {
+            setExportedVideo({
+              sourceType: 'youtube',
+              url: parsedYt.embedUrl,
+              embedUrl: parsedYt.embedUrl,
+              originalUrl: parsedYt.originalUrl,
+              externalId: parsedYt.id,
+              filename: `Video YouTube (${parsedYt.id})`,
+              duration: 0,
+              sizeBytes: 0,
+              timestamp: Date.now(),
+              isUploaded: true,
+              isDefault: false,
+              accessible: true,
+            });
+            return;
+          }
+        }
+
+        if (gdParam) {
+          const parsedGd = parseGoogleDriveUrl(
+            gdParam.includes('drive.google.com')
+              ? gdParam
+              : `https://drive.google.com/file/d/${gdParam}/view`
+          );
+          if (parsedGd.valid) {
+            setExportedVideo({
+              sourceType: 'gdrive',
+              url: parsedGd.embedUrl,
+              embedUrl: parsedGd.embedUrl,
+              originalUrl: parsedGd.originalUrl,
+              externalId: parsedGd.id,
+              filename: `Video Google Drive (${parsedGd.id.slice(0, 8)}...)`,
+              duration: 0,
+              sizeBytes: 0,
+              timestamp: Date.now(),
+              isUploaded: true,
+              isDefault: false,
+              accessible: true,
+            });
+            return;
+          }
+        }
+
+        // 2. Đọc bộ nhớ cục bộ trình duyệt (IndexedDB) & cấu hình dev server nếu đang chạy trong AI Studio
         const [localMeta, savedBlob, serverResp] = await Promise.all([
           loadActiveVideoSourceMeta(),
           loadExportedVideoBlob('active-exported-video'),
-          fetch('/api/active-lesson-video').then(r => (r.ok ? r.json() : null)).catch(() => null),
+          import.meta.env.DEV
+            ? fetch('/api/active-lesson-video')
+                .then(r => (r.ok ? r.json() : null))
+                .catch(() => null)
+            : Promise.resolve(null),
         ]);
 
-        const hasServerLink =
+        const sharedConfig = SHARED_LESSON_VIDEO_CONFIG;
+        const hasSharedRemoteConfig =
+          (sharedConfig.sourceType === 'youtube' || sharedConfig.sourceType === 'gdrive') &&
+          !!sharedConfig.embedUrl;
+
+        const hasDevServerLink =
           serverResp &&
           serverResp.exists &&
           (serverResp.sourceType === 'youtube' || serverResp.sourceType === 'gdrive');
 
         const localTimestamp = localMeta?.timestamp || savedBlob?.savedAt || 0;
-        const serverTimestamp = serverResp?.timestamp || 0;
+        const sharedTimestamp = Math.max(
+          hasSharedRemoteConfig ? sharedConfig.updatedAt || 1 : 0,
+          hasDevServerLink ? serverResp.timestamp || 1 : 0
+        );
 
-        // 1. If device has a locally stored video that is newer than or equal to server link
+        // Nếu trên thiết bị hiện tại có video cục bộ mới hơn cấu hình dùng chung
         if (
           localMeta?.sourceType === 'local' &&
           savedBlob?.blob &&
           savedBlob.blob.size > 0 &&
-          (!hasServerLink || localTimestamp >= serverTimestamp)
+          localTimestamp >= sharedTimestamp
         ) {
           const url = URL.createObjectURL(savedBlob.blob);
           setExportedVideo({
@@ -54,32 +151,19 @@ export default function App() {
             timestamp: localTimestamp,
             isUploaded: true,
             isDefault: false,
+            storageNote:
+              'Video đang lưu cục bộ trong IndexedDB của trình duyệt này (không tự đồng bộ sang thiết bị khác hoặc máy chủ Vercel).',
           });
           return;
         }
 
-        // 2. If server has a saved YouTube / Google Drive link (cross-device sync)
-        if (hasServerLink) {
-          setExportedVideo({
-            sourceType: serverResp.sourceType,
-            url: serverResp.embedUrl || serverResp.url,
-            embedUrl: serverResp.embedUrl || serverResp.url,
-            originalUrl: serverResp.originalUrl,
-            externalId: serverResp.externalId,
-            filename: serverResp.filename || 'Video bài học trực tuyến',
-            duration: 0,
-            sizeBytes: 0,
-            timestamp: serverTimestamp,
-            isUploaded: true,
-            isDefault: false,
-            accessible: serverResp.accessible,
-            accessMessage: serverResp.accessMessage,
-          });
-          return;
-        }
-
-        // 3. If IndexedDB has an external link metadata record
-        if (localMeta && (localMeta.sourceType === 'youtube' || localMeta.sourceType === 'gdrive') && localMeta.embedUrl) {
+        // Nếu cấu hình trong IndexedDB trên trình duyệt là link YouTube/Drive mới hơn
+        if (
+          localMeta &&
+          (localMeta.sourceType === 'youtube' || localMeta.sourceType === 'gdrive') &&
+          localMeta.embedUrl &&
+          localTimestamp > sharedTimestamp
+        ) {
           setExportedVideo({
             sourceType: localMeta.sourceType,
             url: localMeta.embedUrl,
@@ -98,8 +182,34 @@ export default function App() {
           return;
         }
 
-        // 4. If IndexedDB has a saved local blob without meta
-        if (savedBlob?.blob && savedBlob.blob.size > 0) {
+        // Nếu đang ở môi trường dev AI Studio và có liên kết mới từ server
+        if (hasDevServerLink && (serverResp.timestamp || 0) >= (sharedConfig.updatedAt || 0)) {
+          setExportedVideo({
+            sourceType: serverResp.sourceType,
+            url: serverResp.embedUrl || serverResp.url,
+            embedUrl: serverResp.embedUrl || serverResp.url,
+            originalUrl: serverResp.originalUrl,
+            externalId: serverResp.externalId,
+            filename: serverResp.filename || 'Video bài học trực tuyến',
+            duration: 0,
+            sizeBytes: 0,
+            timestamp: serverResp.timestamp || Date.now(),
+            isUploaded: true,
+            isDefault: false,
+            accessible: serverResp.accessible,
+            accessMessage: serverResp.accessMessage,
+          });
+          return;
+        }
+
+        // Cấu hình dùng chung cố định trong mã nguồn (src/config/lessonVideoConfig.ts)
+        if (hasSharedRemoteConfig) {
+          setExportedVideo(buildSharedFallbackVideo());
+          return;
+        }
+
+        // Video cục bộ chưa có meta nhưng còn blob trong IndexedDB
+        if (savedBlob?.blob && savedBlob.blob.size > 0 && (savedBlob.savedAt || 0) >= sharedTimestamp) {
           const url = URL.createObjectURL(savedBlob.blob);
           setExportedVideo({
             sourceType: 'local',
@@ -111,40 +221,22 @@ export default function App() {
             timestamp: savedBlob.savedAt || Date.now(),
             isUploaded: true,
             isDefault: false,
+            storageNote:
+              'Video đang lưu cục bộ trong IndexedDB của trình duyệt này (không tự đồng bộ sang thiết bị khác hoặc máy chủ Vercel).',
           });
           return;
         }
 
-        // 5. Fallback default sample video
-        setExportedVideo({
-          sourceType: 'default',
-          url: '/video/default-lesson-hcm.webm',
-          filename: 'KhamPha_TPHCM_HD720p.webm',
-          duration: 18.6,
-          sizeBytes: 1958608,
-          timestamp: Date.now(),
-          isDefault: true,
-          isUploaded: false,
-        });
+        setExportedVideo(buildSharedFallbackVideo());
       } catch (e) {
         console.warn('Could not initialize video storage:', e);
-        setExportedVideo({
-          sourceType: 'default',
-          url: '/video/default-lesson-hcm.webm',
-          filename: 'KhamPha_TPHCM_HD720p.webm',
-          duration: 18.6,
-          sizeBytes: 1958608,
-          timestamp: Date.now(),
-          isDefault: true,
-          isUploaded: false,
-        });
+        setExportedVideo(buildSharedFallbackVideo());
       }
     }
 
     initStorage();
   }, []);
 
-  // Fullscreen Listener
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
@@ -169,7 +261,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
-      {/* Top Bar Contract Navigation */}
       <Header
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -181,7 +272,6 @@ export default function App() {
         onToggleTeacherGuide={() => setShowTeacherGuide(prev => !prev)}
       />
 
-      {/* Main Educational Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {activeTab === 'khoi_dong' && (
           <KhoiDongSection
@@ -219,13 +309,11 @@ export default function App() {
         )}
       </main>
 
-      {/* Teacher Guide Side Drawer */}
       <TeacherGuideDrawer
         isOpen={showTeacherGuide}
         onClose={() => setShowTeacherGuide(false)}
       />
 
-      {/* Footer */}
       <footer className="mt-auto border-t border-slate-200 bg-white py-6">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <div className="flex flex-wrap items-center gap-2">
@@ -235,7 +323,7 @@ export default function App() {
             <span>·</span>
             <span>Giáo dục địa phương TP. Hồ Chí Minh</span>
             <span>·</span>
-            <span>Hỗ trợ MP4 / WebM / Drive / YouTube</span>
+            <span>Hỗ trợ YouTube / Google Drive / MP4 / WebM</span>
           </div>
 
           <div className="flex items-center gap-4">

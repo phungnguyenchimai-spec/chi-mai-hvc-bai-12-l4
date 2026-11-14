@@ -14,6 +14,46 @@ const port = parseInt(process.env.PORT || '3000', 10);
 
 const DATA_DIR = path.join(__dirname, 'data');
 const ACTIVE_LINK_FILE = path.join(DATA_DIR, 'active-video-link.json');
+const SHARED_CONFIG_TS_FILE = path.join(__dirname, 'src', 'config', 'lessonVideoConfig.ts');
+
+function writeSharedLessonConfigTs(config: {
+  sourceType: 'youtube' | 'gdrive' | 'default';
+  title: string;
+  videoId: string;
+  originalUrl: string;
+  embedUrl: string;
+  useInKhoiDong: boolean;
+  updatedAt: number;
+}) {
+  const tsContent = `import { VideoSourceType } from '../types';
+
+export interface SharedLessonVideoConfig {
+  sourceType: VideoSourceType;
+  title: string;
+  videoId: string;
+  originalUrl: string;
+  embedUrl: string;
+  useInKhoiDong: boolean;
+  updatedAt: number;
+}
+
+/**
+ * Nguồn cấu hình video dùng chung cho toàn bộ ứng dụng khi triển khai GitHub -> Vercel.
+ * Khi giáo viên lưu video YouTube hoặc Google Drive từ giao diện trong môi trường thiết kế (AI Studio),
+ * tệp này sẽ được cập nhật trực tiếp để đồng bộ cho mọi thiết bị (máy tính, điện thoại, ẩn danh) sau khi deploy.
+ */
+export const SHARED_LESSON_VIDEO_CONFIG: SharedLessonVideoConfig = {
+  sourceType: ${JSON.stringify(config.sourceType)},
+  title: ${JSON.stringify(config.title)},
+  videoId: ${JSON.stringify(config.videoId)},
+  originalUrl: ${JSON.stringify(config.originalUrl)},
+  embedUrl: ${JSON.stringify(config.embedUrl)},
+  useInKhoiDong: ${JSON.stringify(config.useInKhoiDong)},
+  updatedAt: ${JSON.stringify(config.updatedAt)},
+};
+`;
+  writeFileSync(SHARED_CONFIG_TS_FILE, tsContent, 'utf-8');
+}
 
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
@@ -32,6 +72,7 @@ interface SavedExternalVideoLink {
   embedUrl: string;
   filename: string;
   timestamp: number;
+  useInKhoiDong?: boolean;
   accessible?: boolean;
   accessMessage?: string;
 }
@@ -70,6 +111,7 @@ app.get('/api/active-lesson-video', (_req, res) => {
         duration: 0,
         sizeBytes: 0,
         timestamp: savedLink.timestamp,
+        useInKhoiDong: savedLink.useInKhoiDong !== false,
         accessible: savedLink.accessible ?? true,
         accessMessage: savedLink.accessMessage,
       });
@@ -98,10 +140,10 @@ app.get('/api/active-lesson-video', (_req, res) => {
 });
 
 // Endpoint: POST /api/lesson-video-link
-// Chỉ lưu đường dẫn và metadata nhỏ gọn của YouTube hoặc Google Drive (không lưu file video hay Base64)
+// Chỉ lưu đường dẫn và metadata nhỏ gọn của YouTube hoặc Google Drive vào cấu hình dùng chung
 app.post('/api/lesson-video-link', (req, res) => {
   try {
-    const { sourceType, originalUrl, externalId, embedUrl, filename, timestamp, accessible, accessMessage } = req.body || {};
+    const { sourceType, originalUrl, externalId, embedUrl, filename, timestamp, useInKhoiDong, accessible, accessMessage } = req.body || {};
 
     if (sourceType !== 'youtube' && sourceType !== 'gdrive') {
       return res.status(400).json({ error: 'Loại nguồn liên kết không hợp lệ.' });
@@ -114,19 +156,35 @@ app.post('/api/lesson-video-link', (req, res) => {
       mkdirSync(DATA_DIR, { recursive: true });
     }
 
+    const nowTs = typeof timestamp === 'number' ? timestamp : Date.now();
+    const resolvedTitle = String(
+      filename || (sourceType === 'youtube' ? `YouTube (${externalId})` : `Google Drive (${externalId})`)
+    );
+
     const payload: SavedExternalVideoLink = {
       sourceType,
       originalUrl: String(originalUrl || embedUrl),
       externalId: String(externalId),
       embedUrl: String(embedUrl),
-      filename: String(filename || (sourceType === 'youtube' ? `YouTube (${externalId})` : `Google Drive (${externalId})`)),
-      timestamp: typeof timestamp === 'number' ? timestamp : Date.now(),
+      filename: resolvedTitle,
+      timestamp: nowTs,
+      useInKhoiDong: useInKhoiDong !== false,
       accessible: accessible !== false,
       accessMessage: accessMessage ? String(accessMessage) : undefined,
     };
 
     writeFileSync(ACTIVE_LINK_FILE, JSON.stringify(payload, null, 2), 'utf-8');
-    return res.json({ success: true, data: payload });
+    writeSharedLessonConfigTs({
+      sourceType,
+      title: resolvedTitle,
+      videoId: payload.externalId,
+      originalUrl: payload.originalUrl,
+      embedUrl: payload.embedUrl,
+      useInKhoiDong: payload.useInKhoiDong !== false,
+      updatedAt: nowTs,
+    });
+
+    return res.json({ success: true, savedInSharedConfig: true, data: payload });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Không thể lưu đường dẫn video' });
   }
@@ -140,6 +198,15 @@ app.delete('/api/lesson-video-link', (_req, res) => {
       unlinkSync(ACTIVE_LINK_FILE);
       deleted = true;
     }
+    writeSharedLessonConfigTs({
+      sourceType: 'default',
+      title: 'KhamPha_TPHCM_HD720p.webm',
+      videoId: '',
+      originalUrl: '',
+      embedUrl: '/video/default-lesson-hcm.webm',
+      useInKhoiDong: true,
+      updatedAt: 0,
+    });
     // Dọn dẹp nếu còn tệp tải lên cũ từ phiên bản trước
     const legacyCandidates = ['uploaded-lesson-video.mp4', 'uploaded-lesson-video.webm'];
     for (const name of legacyCandidates) {

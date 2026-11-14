@@ -9,8 +9,7 @@ import {
   Minimize,
   FastForward,
   Rewind,
-  AlertCircle,
-  ExternalLink
+  AlertCircle
 } from 'lucide-react';
 import { ExportedVideo, VideoSourceType } from '../types';
 import { formatVideoDuration } from '../utils/videoLinks';
@@ -328,18 +327,6 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
             className="w-full h-full border-0"
           />
           <div className="absolute top-3 right-3 z-20 flex items-center gap-2 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-            {video?.originalUrl && (
-              <a
-                href={video.originalUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-2.5 py-1.5 rounded-lg bg-slate-900/80 hover:bg-slate-900 text-white text-xs font-medium flex items-center gap-1 backdrop-blur-xs border border-white/15"
-                title="Mở liên kết gốc ở tab mới"
-              >
-                <ExternalLink className="w-3.5 h-3.5" />
-                <span>Mở gốc</span>
-              </a>
-            )}
             <button
               type="button"
               onClick={toggleFullscreen}

@@ -47,7 +47,7 @@ export function parseYouTubeUrl(input: string): ParsedVideoLink {
         valid: true,
         provider: 'youtube',
         id: videoId,
-        embedUrl: `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&enablejsapi=1`,
+        embedUrl: `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&enablejsapi=1&playsinline=1`,
         originalUrl: raw,
       };
     }
@@ -63,7 +63,7 @@ export function parseYouTubeUrl(input: string): ParsedVideoLink {
       valid: true,
       provider: 'youtube',
       id: videoId,
-      embedUrl: `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&enablejsapi=1`,
+      embedUrl: `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&enablejsapi=1&playsinline=1`,
       originalUrl: raw,
     };
   }
@@ -172,3 +172,60 @@ export function getSourceLabel(sourceType?: VideoSourceType): string {
       return 'Video mẫu mặc định';
   }
 }
+
+export async function checkYouTubeVideoClient(videoId: string): Promise<{
+  accessible: boolean;
+  warning?: boolean;
+  title?: string;
+  author?: string;
+  message: string;
+}> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
+      `https://www.youtube.com/watch?v=${videoId}`
+    )}&format=json`;
+    const resp = await fetch(oembedUrl, { signal: controller.signal });
+    clearTimeout(timer);
+
+    if (resp.ok) {
+      const data = await resp.json();
+      return {
+        accessible: true,
+        title: data?.title || `Video YouTube (${videoId})`,
+        author: data?.author_name || '',
+        message: 'Video YouTube hợp lệ (Công khai / Không công khai) và cho phép phát nhúng trực tiếp trong ứng dụng.',
+      };
+    }
+
+    if (resp.status === 401 || resp.status === 403) {
+      return {
+        accessible: false,
+        message:
+          'Video YouTube này đang ở chế độ Riêng tư (Private) hoặc tắt quyền nhúng. Hãy chuyển sang Công khai hoặc Không công khai và bật "Cho phép nhúng".',
+      };
+    }
+
+    if (resp.status === 404) {
+      return {
+        accessible: false,
+        message: 'Không tìm thấy video YouTube với đường dẫn này. Vui lòng kiểm tra lại.',
+      };
+    }
+
+    return {
+      accessible: true,
+      warning: true,
+      message: `Đã nhận diện ID YouTube (${videoId}). Nhấn phát ở khung xem trước bên dưới để kiểm tra.`,
+    };
+  } catch {
+    clearTimeout(timer);
+    return {
+      accessible: true,
+      warning: true,
+      message: `Đã nhận diện mã video YouTube (${videoId}). Nhấn phát ở khung xem trước bên dưới để xác nhận phát trực tiếp.`,
+    };
+  }
+}
+
