@@ -58,6 +58,41 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
   const [showControls, setShowControls] = useState(true);
   const [mediaError, setMediaError] = useState<string | null>(null);
 
+  const callbacksRef = useRef({
+    onPlay,
+    onPause,
+    onSeeking,
+    onSeeked,
+    onSeek,
+    onVolumeChange,
+    onTimeUpdate,
+    onEnded,
+  });
+  callbacksRef.current = {
+    onPlay,
+    onPause,
+    onSeeking,
+    onSeeked,
+    onSeek,
+    onVolumeChange,
+    onTimeUpdate,
+    onEnded,
+  };
+
+  const ytTelemetryRef = useRef<{
+    baselineCaptured: boolean;
+    lastTime: number;
+    lastState: number | null;
+    lastVolume: number | null;
+    lastMuted: boolean | null;
+  }>({
+    baselineCaptured: false,
+    lastTime: 0,
+    lastState: null,
+    lastVolume: null,
+    lastMuted: null,
+  });
+
   const rawSrc = video?.embedUrl || video?.url || videoUrl || '/video/default-lesson-hcm.webm';
   const resolvedSourceType: VideoSourceType =
     video?.sourceType ||
@@ -79,6 +114,13 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
     setCurrentTime(0);
     setDuration(video?.duration && video.duration > 0 ? video.duration : 0);
     setMediaError(null);
+    ytTelemetryRef.current = {
+      baselineCaptured: false,
+      lastTime: 0,
+      lastState: null,
+      lastVolume: null,
+      lastMuted: null,
+    };
   }, [resolvedSrc, video?.duration]);
 
   // Listen to fullscreen changes
@@ -99,7 +141,7 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
     const handleLoadedMetadata = () => {
       if (vidEl.duration && !isNaN(vidEl.duration) && isFinite(vidEl.duration)) {
         setDuration(vidEl.duration);
-        onTimeUpdate?.(vidEl.currentTime, vidEl.duration);
+        callbacksRef.current.onTimeUpdate?.(vidEl.currentTime, vidEl.duration);
       }
       setMediaError(null);
     };
@@ -112,39 +154,39 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
 
     const handlePlay = () => {
       setIsPlaying(true);
-      onPlay?.();
+      callbacksRef.current.onPlay?.();
     };
 
     const handlePause = () => {
       setIsPlaying(false);
-      onPause?.(vidEl.currentTime);
+      callbacksRef.current.onPause?.(vidEl.currentTime);
     };
 
     const handleTimeUpdate = () => {
       setCurrentTime(vidEl.currentTime);
       const realDur = vidEl.duration && !isNaN(vidEl.duration) && isFinite(vidEl.duration) ? vidEl.duration : 0;
       if (realDur > 0) setDuration(realDur);
-      onTimeUpdate?.(vidEl.currentTime, realDur);
+      callbacksRef.current.onTimeUpdate?.(vidEl.currentTime, realDur);
     };
 
     const handleVolume = () => {
       setVolume(vidEl.volume);
       setIsMuted(vidEl.muted);
-      onVolumeChange?.(vidEl.volume, vidEl.muted);
+      callbacksRef.current.onVolumeChange?.(vidEl.volume, vidEl.muted);
     };
 
     const handleSeeking = () => {
-      onSeeking?.(vidEl.currentTime);
+      callbacksRef.current.onSeeking?.(vidEl.currentTime);
     };
 
     const handleSeeked = () => {
-      onSeeked?.(vidEl.currentTime);
-      onSeek?.(vidEl.currentTime);
+      callbacksRef.current.onSeeked?.(vidEl.currentTime);
+      callbacksRef.current.onSeek?.(vidEl.currentTime);
     };
 
     const handleEnded = () => {
       setIsPlaying(false);
-      onEnded?.();
+      callbacksRef.current.onEnded?.();
     };
 
     const handleError = () => {
@@ -175,13 +217,12 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
       vidEl.removeEventListener('ended', handleEnded);
       vidEl.removeEventListener('error', handleError);
     };
-  }, [isEmbed, resolvedSrc, onPlay, onPause, onSeeking, onSeeked, onSeek, onVolumeChange, onTimeUpdate, onEnded]);
+  }, [isEmbed, resolvedSrc]);
 
   // YouTube postMessage telemetry listener (for LuyenTap practice tracking when a YouTube video is active)
   useEffect(() => {
     if (resolvedSourceType !== 'youtube') return;
 
-    let lastYtTime = 0;
     const handleMessage = (event: MessageEvent) => {
       if (!event.origin.includes('youtube.com')) return;
       try {
@@ -189,31 +230,91 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
         if (!data || !data.info) return;
 
         const info = data.info;
-        if (typeof info.playerState === 'number') {
+        const telemetry = ytTelemetryRef.current;
+
+        // Sự kiện initialDelivery khi iframe vừa khởi tạo chỉ dùng để ghi nhận trạng thái ban đầu,
+        // tuyệt đối không tính là thao tác của học sinh.
+        if (data.event === 'initialDelivery') {
+          telemetry.baselineCaptured = true;
+          if (typeof info.currentTime === 'number') {
+            telemetry.lastTime = info.currentTime;
+            setCurrentTime(info.currentTime);
+          }
+          if (typeof info.duration === 'number' && info.duration > 0) {
+            setDuration(info.duration);
+          }
+          if (typeof info.playerState === 'number') {
+            telemetry.lastState = info.playerState;
+          }
+          if (typeof info.volume === 'number') {
+            telemetry.lastVolume = info.volume;
+          }
+          if (typeof info.muted === 'boolean') {
+            telemetry.lastMuted = info.muted;
+          }
+          return;
+        }
+
+        if (typeof info.playerState === 'number' && info.playerState !== telemetry.lastState) {
+          telemetry.lastState = info.playerState;
           if (info.playerState === 1) {
             setIsPlaying(true);
-            onPlay?.();
+            callbacksRef.current.onPlay?.();
           } else if (info.playerState === 2) {
             setIsPlaying(false);
-            onPause?.(info.currentTime ?? lastYtTime);
+            callbacksRef.current.onPause?.(info.currentTime ?? telemetry.lastTime);
           } else if (info.playerState === 0) {
             setIsPlaying(false);
-            onEnded?.();
+            callbacksRef.current.onEnded?.();
           }
         }
+
         if (typeof info.currentTime === 'number') {
-          const jump = Math.abs(info.currentTime - lastYtTime);
-          if (jump > 2.2) {
-            onSeeking?.(info.currentTime);
-            onSeeked?.(info.currentTime);
-            onSeek?.(info.currentTime);
+          if (telemetry.baselineCaptured) {
+            const jump = Math.abs(info.currentTime - telemetry.lastTime);
+            if (jump > 2.2) {
+              callbacksRef.current.onSeeking?.(info.currentTime);
+              callbacksRef.current.onSeeked?.(info.currentTime);
+              callbacksRef.current.onSeek?.(info.currentTime);
+            }
+          } else {
+            telemetry.baselineCaptured = true;
           }
-          lastYtTime = info.currentTime;
+          telemetry.lastTime = info.currentTime;
           setCurrentTime(info.currentTime);
-          onTimeUpdate?.(info.currentTime, info.duration || 0);
+          callbacksRef.current.onTimeUpdate?.(info.currentTime, info.duration || 0);
         }
-        if (typeof info.volume === 'number' || typeof info.muted === 'boolean') {
-          onVolumeChange?.((info.volume ?? 100) / 100, !!info.muted);
+
+        // Chỉ báo thay đổi âm lượng khi thực sự khác với mức âm lượng / tắt tiếng trước đó
+        const hasVolumeField = typeof info.volume === 'number';
+        const hasMutedField = typeof info.muted === 'boolean';
+        if (hasVolumeField || hasMutedField) {
+          let volumeActuallyChanged = false;
+
+          if (hasVolumeField) {
+            if (telemetry.lastVolume === null) {
+              // Gói tin đầu tiên mang thông tin âm lượng -> ghi nhận mốc nền, không tính là học sinh chỉnh
+              telemetry.lastVolume = info.volume;
+            } else if (info.volume !== telemetry.lastVolume) {
+              telemetry.lastVolume = info.volume;
+              volumeActuallyChanged = true;
+            }
+          }
+
+          if (hasMutedField) {
+            if (telemetry.lastMuted === null) {
+              telemetry.lastMuted = info.muted;
+            } else if (info.muted !== telemetry.lastMuted) {
+              telemetry.lastMuted = info.muted;
+              volumeActuallyChanged = true;
+            }
+          }
+
+          if (volumeActuallyChanged) {
+            const resolvedVol = (hasVolumeField ? info.volume : telemetry.lastVolume ?? 100) / 100;
+            const resolvedMuted = hasMutedField ? !!info.muted : !!telemetry.lastMuted;
+            callbacksRef.current.onVolumeChange?.(resolvedVol, resolvedMuted);
+          }
         }
       } catch {
         // Ignore non-JSON messages
@@ -222,7 +323,7 @@ export const InteractiveVideoPlayer: React.FC<InteractiveVideoPlayerProps> = ({
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [resolvedSourceType, onPlay, onPause, onSeeking, onSeeked, onSeek, onVolumeChange, onTimeUpdate, onEnded]);
+  }, [resolvedSourceType, resolvedSrc]);
 
   const handleIframeLoad = () => {
     if (resolvedSourceType === 'youtube' && iframeRef.current?.contentWindow) {

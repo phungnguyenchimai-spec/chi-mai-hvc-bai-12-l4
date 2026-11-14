@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { MULTIMEDIA_CONTROLS } from '../../data/sampleData';
 import { AppTab } from '../../types';
 import confetti from 'canvas-confetti';
@@ -30,6 +30,15 @@ const ICON_COMPONENTS: Record<string, React.FC<{ className?: string }>> = {
   Maximize,
 };
 
+const SANDBOX_SUCCESS_MESSAGES: Record<string, string> = {
+  play: 'Tuyệt vời! Em đã nhấn Phát (Play) để video bắt đầu chạy.',
+  pause: 'Chính xác! Em đã Tạm dừng (Pause) video đúng cách.',
+  progress: 'Giỏi lắm! Em đã kéo thanh tiến trình để tua đến thời điểm mới.',
+  volume: 'Tuyệt vời! Em đã điều chỉnh mức âm lượng thành công.',
+  replay: 'Hoan hô! Em đã thực hiện Xem lại (Replay) video từ đầu.',
+  fullscreen: 'Xuất sắc! Em đã thử nghiệm chế độ Toàn màn hình (Fullscreen).',
+};
+
 export const KhamPhaSection: React.FC<KhamPhaSectionProps> = ({ onNavigateTab }) => {
   // Matching Game State
   const [selectedIconId, setSelectedIconId] = useState<string | null>(null);
@@ -41,8 +50,113 @@ export const KhamPhaSection: React.FC<KhamPhaSectionProps> = ({ onNavigateTab })
   const [sandboxVolume, setSandboxVolume] = useState<number>(80);
   const [sandboxPlaying, setSandboxPlaying] = useState<boolean>(false);
   const [sandboxProgress, setSandboxProgress] = useState<number>(35);
+  const [sandboxFeedback, setSandboxFeedback] = useState<string | null>(null);
+
+  // Refs to prevent duplicate fireworks during slider drag or rapid clicks
+  const lastFireworksAtRef = useRef<number>(0);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const volumeStartRef = useRef<number>(80);
+  const volumeCurrentRef = useRef<number>(80);
+  const isDraggingVolumeRef = useRef<boolean>(false);
+  const volumeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const progressStartRef = useRef<number>(35);
+  const progressCurrentRef = useRef<number>(35);
+  const isDraggingProgressRef = useRef<boolean>(false);
+  const progressDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const activeControl = MULTIMEDIA_CONTROLS.find(c => c.id === activeInspectorId) || MULTIMEDIA_CONTROLS[0];
+
+  const triggerSandboxFireworks = useCallback((controlId: string) => {
+    const now = Date.now();
+    if (now - lastFireworksAtRef.current >= 500) {
+      lastFireworksAtRef.current = now;
+      confetti({
+        particleCount: 45,
+        spread: 68,
+        startVelocity: 32,
+        ticks: 115, // Tự kết thúc nhẹ nhàng sau khoảng ~1.9 - 2 giây, không che thao tác
+        origin: { y: 0.72 },
+        colors: ['#38bdf8', '#818cf8', '#34d399', '#fbbf24', '#f472b6'],
+      });
+    }
+
+    const msg = SANDBOX_SUCCESS_MESSAGES[controlId];
+    if (msg) {
+      setSandboxFeedback(msg);
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = setTimeout(() => {
+        setSandboxFeedback(null);
+      }, 2200);
+    }
+  }, []);
+
+  const commitVolumePractice = useCallback(() => {
+    if (volumeDebounceRef.current) {
+      clearTimeout(volumeDebounceRef.current);
+      volumeDebounceRef.current = null;
+    }
+    const finalVal = volumeCurrentRef.current;
+    if (finalVal !== volumeStartRef.current) {
+      volumeStartRef.current = finalVal;
+      triggerSandboxFireworks('volume');
+    }
+  }, [triggerSandboxFireworks]);
+
+  const commitProgressPractice = useCallback(() => {
+    if (progressDebounceRef.current) {
+      clearTimeout(progressDebounceRef.current);
+      progressDebounceRef.current = null;
+    }
+    const finalVal = progressCurrentRef.current;
+    if (finalVal !== progressStartRef.current) {
+      progressStartRef.current = finalVal;
+      triggerSandboxFireworks('progress');
+    }
+  }, [triggerSandboxFireworks]);
+
+  // Ensure slider drag release is captured even if pointer moves outside the slider track
+  useEffect(() => {
+    const handleGlobalPointerUp = () => {
+      if (isDraggingVolumeRef.current) {
+        isDraggingVolumeRef.current = false;
+        commitVolumePractice();
+      }
+      if (isDraggingProgressRef.current) {
+        isDraggingProgressRef.current = false;
+        commitProgressPractice();
+      }
+    };
+
+    window.addEventListener('pointerup', handleGlobalPointerUp);
+    window.addEventListener('pointercancel', handleGlobalPointerUp);
+    window.addEventListener('touchend', handleGlobalPointerUp);
+    return () => {
+      window.removeEventListener('pointerup', handleGlobalPointerUp);
+      window.removeEventListener('pointercancel', handleGlobalPointerUp);
+      window.removeEventListener('touchend', handleGlobalPointerUp);
+    };
+  }, [commitVolumePractice, commitProgressPractice]);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      if (volumeDebounceRef.current) clearTimeout(volumeDebounceRef.current);
+      if (progressDebounceRef.current) clearTimeout(progressDebounceRef.current);
+    };
+  }, []);
+
+  const handleSelectInspectorControl = (controlId: string) => {
+    // Chỉ chuyển mục xem hướng dẫn, KHÔNG bắn pháo hoa
+    setActiveInspectorId(controlId);
+    setSandboxFeedback(null);
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
+  };
 
   const handleIconClick = (id: string) => {
     if (matchedPairs.includes(id)) return;
@@ -258,7 +372,7 @@ export const KhamPhaSection: React.FC<KhamPhaSectionProps> = ({ onNavigateTab })
             return (
               <button
                 key={c.id}
-                onClick={() => setActiveInspectorId(c.id)}
+                onClick={() => handleSelectInspectorControl(c.id)}
                 className={`px-3.5 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all ${
                   isSelected
                     ? 'bg-sky-500 text-white shadow-md shadow-sky-500/25 scale-105'
@@ -306,14 +420,22 @@ export const KhamPhaSection: React.FC<KhamPhaSectionProps> = ({ onNavigateTab })
                 </div>
                 <div className="flex justify-center gap-3">
                   <button
-                    onClick={() => setSandboxPlaying(true)}
+                    type="button"
+                    onClick={() => {
+                      setSandboxPlaying(true);
+                      triggerSandboxFireworks('play');
+                    }}
                     className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold flex items-center gap-1.5 transition-all"
                   >
                     <Play className="w-4 h-4 fill-white" />
                     <span>Thử nhấn Phát (Play)</span>
                   </button>
                   <button
-                    onClick={() => setSandboxPlaying(false)}
+                    type="button"
+                    onClick={() => {
+                      setSandboxPlaying(false);
+                      triggerSandboxFireworks('pause');
+                    }}
                     className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-all"
                   >
                     <Pause className="w-4 h-4 fill-white" />
@@ -332,7 +454,33 @@ export const KhamPhaSection: React.FC<KhamPhaSectionProps> = ({ onNavigateTab })
                   min={0}
                   max={100}
                   value={sandboxVolume}
-                  onChange={(e) => setSandboxVolume(Number(e.target.value))}
+                  onPointerDown={() => {
+                    isDraggingVolumeRef.current = true;
+                    volumeStartRef.current = sandboxVolume;
+                  }}
+                  onTouchStart={() => {
+                    isDraggingVolumeRef.current = true;
+                    volumeStartRef.current = sandboxVolume;
+                  }}
+                  onChange={(e) => {
+                    const nextVal = Number(e.target.value);
+                    volumeCurrentRef.current = nextVal;
+                    setSandboxVolume(nextVal);
+                    if (!isDraggingVolumeRef.current) {
+                      if (volumeDebounceRef.current) clearTimeout(volumeDebounceRef.current);
+                      volumeDebounceRef.current = setTimeout(() => {
+                        commitVolumePractice();
+                      }, 220);
+                    }
+                  }}
+                  onPointerUp={() => {
+                    isDraggingVolumeRef.current = false;
+                    commitVolumePractice();
+                  }}
+                  onTouchEnd={() => {
+                    isDraggingVolumeRef.current = false;
+                    commitVolumePractice();
+                  }}
                   className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-400"
                 />
                 <p className="text-xs text-slate-400">
@@ -350,7 +498,33 @@ export const KhamPhaSection: React.FC<KhamPhaSectionProps> = ({ onNavigateTab })
                   min={0}
                   max={100}
                   value={sandboxProgress}
-                  onChange={(e) => setSandboxProgress(Number(e.target.value))}
+                  onPointerDown={() => {
+                    isDraggingProgressRef.current = true;
+                    progressStartRef.current = sandboxProgress;
+                  }}
+                  onTouchStart={() => {
+                    isDraggingProgressRef.current = true;
+                    progressStartRef.current = sandboxProgress;
+                  }}
+                  onChange={(e) => {
+                    const nextVal = Number(e.target.value);
+                    progressCurrentRef.current = nextVal;
+                    setSandboxProgress(nextVal);
+                    if (!isDraggingProgressRef.current) {
+                      if (progressDebounceRef.current) clearTimeout(progressDebounceRef.current);
+                      progressDebounceRef.current = setTimeout(() => {
+                        commitProgressPractice();
+                      }, 220);
+                    }
+                  }}
+                  onPointerUp={() => {
+                    isDraggingProgressRef.current = false;
+                    commitProgressPractice();
+                  }}
+                  onTouchEnd={() => {
+                    isDraggingProgressRef.current = false;
+                    commitProgressPractice();
+                  }}
                   className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-sky-400"
                 />
                 <p className="text-xs text-slate-400">
@@ -363,13 +537,26 @@ export const KhamPhaSection: React.FC<KhamPhaSectionProps> = ({ onNavigateTab })
                   Nhấn nút để kích hoạt tính năng {activeControl.name}:
                 </p>
                 <button
+                  type="button"
                   onClick={() => {
-                    confetti({ particleCount: 20, spread: 50, origin: { y: 0.8 } });
+                    if (activeInspectorId === 'replay') {
+                      setSandboxProgress(0);
+                      progressStartRef.current = 0;
+                      progressCurrentRef.current = 0;
+                    }
+                    triggerSandboxFireworks(activeInspectorId);
                   }}
                   className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all"
                 >
                   Kích hoạt {activeControl.name}
                 </button>
+              </div>
+            )}
+
+            {sandboxFeedback && (
+              <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-medium flex items-center gap-2 animate-in fade-in duration-200">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{sandboxFeedback}</span>
               </div>
             )}
           </div>

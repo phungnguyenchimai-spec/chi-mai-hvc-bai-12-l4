@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { InteractiveVideoPlayer } from '../InteractiveVideoPlayer';
 import { ExportedVideo, AppTab } from '../../types';
 import confetti from 'canvas-confetti';
@@ -17,12 +17,7 @@ import {
   SlidersHorizontal
 } from 'lucide-react';
 
-interface LuyenTapSectionProps {
-  exportedVideo: ExportedVideo | null;
-  onNavigateTab: (tab: AppTab) => void;
-}
-
-interface Mission {
+export interface LuyenTapMission {
   id: number;
   title: string;
   description: string;
@@ -32,11 +27,8 @@ interface Mission {
   hint?: string;
 }
 
-export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
-  exportedVideo,
-  onNavigateTab,
-}) => {
-  const [missions, setMissions] = useState<Mission[]>([
+export function createInitialLuyenTapMissions(): LuyenTapMission[] {
+  return [
     {
       id: 1,
       title: 'Nhiệm vụ 1: Phát video (Play)',
@@ -72,40 +64,103 @@ export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
       guide: 'Chọn câu trả lời đúng bên dưới để hoàn tất bài thực hành.',
       completed: false,
     },
-  ]);
+  ];
+}
+
+interface LuyenTapSectionProps {
+  exportedVideo: ExportedVideo | null;
+  onNavigateTab: (tab: AppTab) => void;
+  missions?: LuyenTapMission[];
+  onMissionsChange?: React.Dispatch<React.SetStateAction<LuyenTapMission[]>>;
+  mission5Selected?: number | null;
+  onMission5SelectedChange?: React.Dispatch<React.SetStateAction<number | null>>;
+  mission5Checked?: boolean;
+  onMission5CheckedChange?: React.Dispatch<React.SetStateAction<boolean>>;
+  statusMessage?: string;
+  onStatusMessageChange?: React.Dispatch<React.SetStateAction<string>>;
+}
+
+export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
+  exportedVideo,
+  onNavigateTab,
+  missions: controlledMissions,
+  onMissionsChange,
+  mission5Selected: controlledMission5Selected,
+  onMission5SelectedChange,
+  mission5Checked: controlledMission5Checked,
+  onMission5CheckedChange,
+  statusMessage: controlledStatusMessage,
+  onStatusMessageChange,
+}) => {
+  const [internalMissions, setInternalMissions] = useState<LuyenTapMission[]>(() => createInitialLuyenTapMissions());
+  const [internalMission5Selected, setInternalMission5Selected] = useState<number | null>(null);
+  const [internalMission5Checked, setInternalMission5Checked] = useState<boolean>(false);
+  const [internalStatusMessage, setInternalStatusMessage] = useState<string>('Hãy bắt đầu với Nhiệm vụ 1: Nhấn Phát video!');
+
+  const missions = controlledMissions ?? internalMissions;
+  const setMissions = onMissionsChange ?? setInternalMissions;
+  const mission5Selected = controlledMission5Selected !== undefined ? controlledMission5Selected : internalMission5Selected;
+  const setMission5Selected = onMission5SelectedChange ?? setInternalMission5Selected;
+  const mission5Checked = controlledMission5Checked !== undefined ? controlledMission5Checked : internalMission5Checked;
+  const setMission5Checked = onMission5CheckedChange ?? setInternalMission5Checked;
+  const statusMessage = controlledStatusMessage !== undefined ? controlledStatusMessage : internalStatusMessage;
+  const setStatusMessage = onStatusMessageChange ?? setInternalStatusMessage;
 
   const [currentVideoTime, setCurrentVideoTime] = useState<number>(0);
   const [videoDuration, setVideoDuration] = useState<number>(100);
-  const [mission5Selected, setMission5Selected] = useState<number | null>(null);
-  const [mission5Checked, setMission5Checked] = useState<boolean>(false);
-  const [statusMessage, setStatusMessage] = useState<string>('Hãy bắt đầu với Nhiệm vụ 1: Nhấn Phát video!');
+
+  const missionsRef = useRef<LuyenTapMission[]>(missions);
+  missionsRef.current = missions;
+
+  // Lưu các nhiệm vụ đã bắn pháo hoa để đảm bảo mỗi nhiệm vụ chỉ bắn pháo hoa 1 lần duy nhất
+  // khi chuyển từ Chưa hoàn thành -> Hoàn thành, tuyệt đối không bắn lại khi chuyển tab hoặc re-render.
+  const firedMissionsRef = useRef<Set<number>>(
+    new Set(missions.filter(m => m.completed).map(m => m.id))
+  );
+
+  useEffect(() => {
+    missions.forEach(m => {
+      if (m.completed) {
+        firedMissionsRef.current.add(m.id);
+      }
+    });
+  }, [missions]);
 
   const markMissionComplete = (id: number, feedbackMsg: string) => {
+    const currentTarget = missionsRef.current.find(m => m.id === id);
+    if (!currentTarget || currentTarget.completed || firedMissionsRef.current.has(id)) {
+      return;
+    }
+
+    firedMissionsRef.current.add(id);
+
+    confetti({
+      particleCount: 25,
+      spread: 50,
+      origin: { y: 0.6 },
+    });
+
     setMissions(prev =>
-      prev.map(m => {
-        if (m.id === id && !m.completed) {
-          confetti({
-            particleCount: 25,
-            spread: 50,
-            origin: { y: 0.6 },
-          });
-          return { ...m, completed: true, feedback: feedbackMsg, hint: undefined };
-        }
-        return m;
-      })
+      prev.map(m =>
+        m.id === id && !m.completed
+          ? { ...m, completed: true, feedback: feedbackMsg, hint: undefined }
+          : m
+      )
     );
     setStatusMessage(`Tuyệt vời! ${feedbackMsg}`);
   };
 
-  // Real JS Event Handlers tracking HTML5 video events
+  // Real JS Event Handlers tracking HTML5 / YouTube player events
   const handlePlayerPlay = () => {
-    if (!missions[0].completed) {
+    const m1 = missionsRef.current.find(m => m.id === 1);
+    if (m1 && !m1.completed) {
       markMissionComplete(1, 'Đã ghi nhận thao tác Phát video thành công!');
     }
   };
 
   const handlePlayerPause = (time: number) => {
-    if (!missions[1].completed) {
+    const m2 = missionsRef.current.find(m => m.id === 2);
+    if (m2 && !m2.completed) {
       if (time >= 4.5 && time <= 16.0) {
         markMissionComplete(2, `Chính xác! Em đã tạm dừng ở giây thứ ${Math.round(time)} đúng yêu cầu.`);
       } else {
@@ -115,13 +170,17 @@ export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
   };
 
   const handlePlayerVolume = (vol: number, muted: boolean) => {
-    if (!missions[2].completed) {
+    const m3 = missionsRef.current.find(m => m.id === 3);
+    if (m3 && !m3.completed) {
       markMissionComplete(3, `Đã ghi nhận thao tác chỉnh âm lượng: ${muted ? 'Tắt tiếng (Mute)' : Math.round(vol * 100) + '%'}.`);
     }
   };
 
-  // Seeking & Seeked Event Handlers for HTML5 video
+  // Seeking & Seeked Event Handlers for HTML5 / YouTube video
   const processSeekAttempt = (time: number) => {
+    const m4 = missionsRef.current.find(m => m.id === 4);
+    if (m4?.completed) return;
+
     if (isNaN(time) || time < 0) {
       setMissions(prev =>
         prev.map(m =>
@@ -134,23 +193,8 @@ export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
     }
 
     if (time >= 15.0) {
-      // Completed successfully
       markMissionComplete(4, '✓ Chính xác! Em đã biết sử dụng thanh tiến trình để tua đến đoạn video cần xem.');
-      setMissions(prev =>
-        prev.map(m =>
-          m.id === 4
-            ? {
-                ...m,
-                completed: true,
-                feedback: '✓ Chính xác! Em đã biết sử dụng thanh tiến trình để tua đến đoạn video cần xem.',
-                hint: undefined,
-              }
-            : m
-        )
-      );
-      setStatusMessage('✓ Chính xác! Em đã biết sử dụng thanh tiến trình để tua đến đoạn video cần xem.');
     } else {
-      // Seeked to < 15s (e.g. 10s)
       setMissions(prev =>
         prev.map(m =>
           m.id === 4 && !m.completed
@@ -168,12 +212,10 @@ export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
   };
 
   const handlePlayerSeeking = (time: number) => {
-    // Recorded seeking event from HTML5 video element
     processSeekAttempt(time);
   };
 
   const handlePlayerSeeked = (time: number) => {
-    // Recorded seeked event from HTML5 video element
     processSeekAttempt(time);
   };
 
@@ -200,14 +242,8 @@ export const LuyenTapSection: React.FC<LuyenTapSectionProps> = ({
   };
 
   const handleResetAllMissions = () => {
-    setMissions(prev =>
-      prev.map(m => ({
-        ...m,
-        completed: false,
-        feedback: undefined,
-        hint: undefined,
-      }))
-    );
+    firedMissionsRef.current.clear();
+    setMissions(createInitialLuyenTapMissions());
     setMission5Selected(null);
     setMission5Checked(false);
     setStatusMessage('Đã làm lại. Hãy nhấn Phát video để bắt đầu Nhiệm vụ 1!');

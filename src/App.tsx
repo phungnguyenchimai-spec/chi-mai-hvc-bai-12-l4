@@ -3,7 +3,7 @@ import { Header } from './components/Header';
 import { TeacherGuideDrawer } from './components/TeacherGuideDrawer';
 import { KhoiDongSection } from './components/sections/KhoiDongSection';
 import { KhamPhaSection } from './components/sections/KhamPhaSection';
-import { LuyenTapSection } from './components/sections/LuyenTapSection';
+import { LuyenTapSection, LuyenTapMission, createInitialLuyenTapMissions } from './components/sections/LuyenTapSection';
 import { VanDungSection } from './components/sections/VanDungSection';
 import { StudioSection } from './components/sections/StudioSection';
 import { AppMode, AppTab, ExportedVideo } from './types';
@@ -66,6 +66,16 @@ export default function App() {
 
   // Khởi tạo ngay từ cấu hình dùng chung (bundled cho Vercel/GitHub)
   const [exportedVideo, setExportedVideo] = useState<ExportedVideo | null>(() => buildSharedFallbackVideo());
+
+  // Giữ nguyên tiến độ hoạt động 3. Luyện tập khi chuyển qua lại giữa các tab
+  const [luyenTapMissions, setLuyenTapMissions] = useState<LuyenTapMission[]>(() =>
+    createInitialLuyenTapMissions()
+  );
+  const [luyenTapMission5Selected, setLuyenTapMission5Selected] = useState<number | null>(null);
+  const [luyenTapMission5Checked, setLuyenTapMission5Checked] = useState<boolean>(false);
+  const [luyenTapStatusMessage, setLuyenTapStatusMessage] = useState<string>(
+    'Hãy bắt đầu với Nhiệm vụ 1: Nhấn Phát video!'
+  );
 
   useEffect(() => {
     async function initStorage() {
@@ -308,6 +318,14 @@ export default function App() {
           <LuyenTapSection
             exportedVideo={exportedVideo}
             onNavigateTab={setActiveTab}
+            missions={luyenTapMissions}
+            onMissionsChange={setLuyenTapMissions}
+            mission5Selected={luyenTapMission5Selected}
+            onMission5SelectedChange={setLuyenTapMission5Selected}
+            mission5Checked={luyenTapMission5Checked}
+            onMission5CheckedChange={setLuyenTapMission5Checked}
+            statusMessage={luyenTapStatusMessage}
+            onStatusMessageChange={setLuyenTapStatusMessage}
           />
         )}
 
